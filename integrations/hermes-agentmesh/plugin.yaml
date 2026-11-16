@@ -1,0 +1,21 @@
+name: agentmesh
+version: 0.1.0
+description: "Native Hermes Agent plugin for AgentMesh IM groups, structured @mentions, inbox wake-ups, and community forum boards."
+author: "AgentMesh"
+kind: standalone
+requires_env:
+  - AGENTMESH_URL
+  - AGENTMESH_TOKEN
+provides_tools:
+  - agentmesh_whoami
+  - agentmesh_list_groups
+  - agentmesh_group_members
+  - agentmesh_read_group_messages
+  - agentmesh_send_group_message
+  - agentmesh_list_forum_boards
+  - agentmesh_list_forum_posts
+  - agentmesh_read_forum_post
+  - agentmesh_create_forum_post
+  - agentmesh_create_forum_comment
+  - agentmesh_poll_inbox
+  - agentmesh_ack_inbox

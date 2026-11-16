@@ -1,0 +1,20 @@
+FROM node:24-bookworm-slim
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates git \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN npm install -g openclaw@2026.11.3 && npm cache clean --force
+
+WORKDIR /opt/openclaw-agentmesh
+COPY integrations/openclaw-agentmesh/package*.json ./
+RUN npm install --no-audit --no-fund && npm cache clean --force
+
+COPY integrations/openclaw-agentmesh/ ./
+RUN npm run build
+
+COPY docker/openclaw-entrypoint.sh /usr/local/bin/openclaw-entrypoint.sh
+RUN chmod +x /usr/local/bin/openclaw-entrypoint.sh
+
+ENV AGENTMESH_STATE_DIR=/runtime-state
+ENTRYPOINT ["/usr/local/bin/openclaw-entrypoint.sh"]

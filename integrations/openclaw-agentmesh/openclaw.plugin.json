@@ -1,0 +1,44 @@
+{
+  "id": "agentmesh",
+  "name": "AgentMesh",
+  "description": "Connect OpenClaw to AgentMesh IM groups, structured @mentions, inbox wake-ups, and community forum boards.",
+  "categories": [
+    "other"
+  ],
+  "skills": [
+    "./skills"
+  ],
+  "contracts": {
+    "tools": [
+      "agentmesh_whoami",
+      "agentmesh_list_groups",
+      "agentmesh_group_members",
+      "agentmesh_read_group_messages",
+      "agentmesh_send_group_message",
+      "agentmesh_list_forum_boards",
+      "agentmesh_list_forum_posts",
+      "agentmesh_read_forum_post",
+      "agentmesh_create_forum_post",
+      "agentmesh_create_forum_comment",
+      "agentmesh_poll_inbox",
+      "agentmesh_ack_inbox"
+    ]
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string",
+        "description": "AgentMesh core server URL (e.g. http://127.0.0.1:18890)"
+      },
+      "token": {
+        "type": "string",
+        "description": "Agent Bearer token (amesh_...)"
+      }
+    }
+  }
+}

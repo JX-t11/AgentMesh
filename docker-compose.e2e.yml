@@ -1,0 +1,153 @@
+name: agentmesh-e2e
+
+x-llm-env: &llm_env
+  LLM_PROVIDER: ${E2E_LLM_PROVIDER:-${LLM_PROVIDER:-zhipu-glm}}
+  LLM_API: ${E2E_LLM_API:-${LLM_API:-anthropic-messages}}
+  LLM_BASE_URL: ${E2E_LLM_BASE_URL:-${LLM_BASE_URL:-https://open.bigmodel.cn/api/anthropic}}
+  LLM_API_KEY: ${E2E_LLM_API_KEY:-${LLM_API_KEY:-}}
+  LLM_MODEL: ${E2E_LLM_MODEL:-${LLM_MODEL:-glm-5.3-flash}}
+  LLM_CONTEXT_WINDOW: ${LLM_CONTEXT_WINDOW:-250000}
+  LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-131072}
+
+x-openclaw-base: &openclaw_base
+  image: agentmesh-openclaw-agent:local
+  build:
+    context: .
+    dockerfile: docker/Dockerfile.openclaw-agent
+  init: true
+  stop_grace_period: 15s
+  depends_on:
+    bootstrap:
+      condition: service_completed_successfully
+  volumes:
+    - e2e-runtime-state:/runtime-state
+
+x-hermes-base: &hermes_base
+  image: agentmesh-hermes-agent:local
+  build:
+    context: .
+    dockerfile: docker/Dockerfile.hermes-agent
+  init: true
+  stop_grace_period: 15s
+  depends_on:
+    bootstrap:
+      condition: service_completed_successfully
+  volumes:
+    - e2e-runtime-state:/runtime-state
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-agentmesh}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agentmesh_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-agentmesh}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agentmesh} -d ${POSTGRES_DB:-agentmesh}"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  agentmesh-server:
+    image: agentmesh-server:local
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.server
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      BIND_ADDR: 0.0.0.0:18890
+      DATABASE_URL: postgres://${POSTGRES_USER:-agentmesh}:${POSTGRES_PASSWORD:-agentmesh_dev}@postgres:5432/${POSTGRES_DB:-agentmesh}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-amesh_admin_dev_secret_change_me}
+      DB_MAX_CONNECTIONS: ${DB_MAX_CONNECTIONS:-50}
+      BROADCAST_CAPACITY: ${BROADCAST_CAPACITY:-1024}
+      MAX_BODY_BYTES: ${MAX_BODY_BYTES:-262144}
+      WEB_DIST_DIR: /app/web/dist
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      - "127.0.0.1:${AGENTMESH_E2E_PORT:-18893}:18890"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:18890/api/v1/health >/dev/null"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  bootstrap:
+    image: node:22-bookworm-slim
+    depends_on:
+      agentmesh-server:
+        condition: service_healthy
+    environment:
+      AGENTMESH_URL: http://agentmesh-server:18890
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-amesh_admin_dev_secret_change_me}
+      AGENTMESH_STATE_DIR: /runtime-state
+    volumes:
+      - ./scripts/e2e:/opt/scripts:ro
+      - e2e-runtime-state:/runtime-state
+    command: ["node", "/opt/scripts/bootstrap.mjs"]
+
+  model-fixture:
+    image: node:22-bookworm-slim
+    profiles: ["protocol-check"]
+    volumes:
+      - ./scripts/e2e:/opt/scripts:ro
+    command: ["node", "/opt/scripts/model-fixture.mjs"]
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:18895/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  openclaw-alpha:
+    <<: *openclaw_base
+    environment:
+      <<: *llm_env
+      AGENTMESH_URL: http://agentmesh-server:18890
+      AGENTMESH_AGENT_SLUG: openclaw-alpha
+      OPENCLAW_SESSION_ID: 11111111-1111-4111-8111-111111111101
+      AGENTMESH_INITIAL_INTENT: ${OPENCLAW_ALPHA_INITIAL_INTENT:-}
+      AGENTMESH_INTENT_ID: ${OPENCLAW_ALPHA_INTENT_ID:-}
+      AGENTMESH_ROLE_PROMPT: >
+        [ROLE:openclaw-alpha] You are openclaw-alpha (OpenClaw coordinator).
+        In IM group mesh-general, initiate or coordinate tasks using agentmesh_send_group_message with structured mentions.
+        In Forum post discussions, review RFCs using agentmesh_create_forum_comment and pass mentions cleanly.
+
+  openclaw-beta:
+    <<: *openclaw_base
+    environment:
+      <<: *llm_env
+      AGENTMESH_URL: http://agentmesh-server:18890
+      AGENTMESH_AGENT_SLUG: openclaw-beta
+      OPENCLAW_SESSION_ID: 11111111-1111-4111-8111-111111111102
+      AGENTMESH_ROLE_PROMPT: >
+        [ROLE:openclaw-beta] You are openclaw-beta (OpenClaw specialist).
+        When mentioned in IM group mesh-general, reply with reply_to_msg_id and mention @hermes-delta.
+        When mentioned in Forum comments, reply with parent_comment_id to verify consensus.
+
+  hermes-gamma:
+    <<: *hermes_base
+    environment:
+      <<: *llm_env
+      AGENTMESH_URL: http://agentmesh-server:18890
+      AGENTMESH_AGENT_SLUG: hermes-gamma
+      AGENTMESH_INITIAL_INTENT: ${HERMES_GAMMA_INITIAL_INTENT:-}
+      AGENTMESH_INTENT_ID: ${HERMES_GAMMA_INTENT_ID:-}
+      AGENTMESH_ROLE_PROMPT: >
+        [ROLE:hermes-gamma] You are hermes-gamma (Hermes analyst).
+        When mentioned in IM group mesh-general, reply with reply_to_msg_id and mention @openclaw-beta.
+        When asked to initiate a Forum RFC, call agentmesh_create_forum_post on board engineering-rfcs mentioning @openclaw-alpha.
+
+  hermes-delta:
+    <<: *hermes_base
+    environment:
+      <<: *llm_env
+      AGENTMESH_URL: http://agentmesh-server:18890
+      AGENTMESH_AGENT_SLUG: hermes-delta
+      AGENTMESH_ROLE_PROMPT: >
+        [ROLE:hermes-delta] You are hermes-delta (Hermes verifier).
+        When mentioned in IM group mesh-general, send a concise final verification reply with reply_to_msg_id.
+        When mentioned in a Forum comment, reply with parent_comment_id mentioning @openclaw-beta.
+
+volumes:
+  e2e-runtime-state:

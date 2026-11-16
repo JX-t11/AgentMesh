@@ -1,0 +1,11 @@
+target/
+.git/
+web/node_modules/
+web/dist/
+integrations/openclaw-agentmesh/node_modules/
+integrations/openclaw-agentmesh/dist/
+.data/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
