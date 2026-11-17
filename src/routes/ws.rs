@@ -12,8 +12,10 @@ use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamMap;
 use uuid::Uuid;
 
-use crate::auth::AgentAuth;
+use crate::auth::{AgentAuth, OptionalViewer};
+use crate::error::AppError;
 use crate::events::{encode_event, resync_frame, AgentSignal};
+use crate::routes::groups::ensure_can_subscribe_group_stream;
 use crate::state::AppState;
 
 const MAX_OBSERVER_GROUPS: usize = 200;
@@ -26,8 +28,12 @@ pub async fn ws_agent(
     ws.on_upgrade(move |socket| run_agent_ws(socket, state, principal.id))
 }
 
-pub async fn ws_observe(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
-    ws.on_upgrade(move |socket| run_observer_ws(socket, state))
+pub async fn ws_observe(
+    viewer: OptionalViewer,
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+) -> Response {
+    ws.on_upgrade(move |socket| run_observer_ws(socket, state, viewer))
 }
 
 async fn run_agent_ws(mut socket: WebSocket, state: AppState, agent_id: Uuid) {
@@ -160,10 +166,12 @@ async fn handle_agent_client_message(socket: &mut WebSocket, raw: &str) -> bool 
 }
 
 async fn fetch_agent_group_ids(state: &AppState, agent_id: Uuid) -> Result<Vec<Uuid>, sqlx::Error> {
-    sqlx::query_scalar("SELECT group_id FROM group_members WHERE agent_id = $1 ORDER BY joined_at ASC")
-        .bind(agent_id)
-        .fetch_all(&state.db)
-        .await
+    sqlx::query_scalar(
+        "SELECT group_id FROM group_members WHERE agent_id = $1 ORDER BY joined_at ASC",
+    )
+    .bind(agent_id)
+    .fetch_all(&state.db)
+    .await
 }
 
 async fn reconcile_agent_groups(
@@ -206,10 +214,11 @@ fn cleanup_agent_subscriptions(
     state.events.cleanup_agent_if_idle(agent_id);
 }
 
-async fn run_observer_ws(mut socket: WebSocket, state: AppState) {
+async fn run_observer_ws(mut socket: WebSocket, state: AppState, viewer: OptionalViewer) {
     let welcome = encode_event(&json!({
         "type": "connected",
         "role": "observer",
+        "authenticated": viewer.is_platform_authenticated(),
     }));
     if socket.send(Message::Text(welcome)).await.is_err() {
         return;
@@ -250,6 +259,7 @@ async fn run_observer_ws(mut socket: WebSocket, state: AppState) {
                         if !handle_observer_command(
                             &mut socket,
                             &state,
+                            &viewer,
                             &mut group_streams,
                             &mut forum_stream,
                             text.as_str(),
@@ -291,6 +301,7 @@ async fn run_observer_ws(mut socket: WebSocket, state: AppState) {
 async fn handle_observer_command(
     socket: &mut WebSocket,
     state: &AppState,
+    viewer: &OptionalViewer,
     group_streams: &mut StreamMap<Uuid, BroadcastStream<Utf8Bytes>>,
     forum_stream: &mut Option<BroadcastStream<Utf8Bytes>>,
     raw: &str,
@@ -319,12 +330,30 @@ async fn handle_observer_command(
                     }));
                     return socket.send(Message::Text(err)).await.is_ok();
                 }
+                if let Err(err) = ensure_can_subscribe_group_stream(state, gid, viewer).await {
+                    let msg = match err {
+                        AppError::Forbidden(m) => m,
+                        other => format!("{other:?}"),
+                    };
+                    let frame = encode_event(&json!({
+                        "type": "error",
+                        "code": "forbidden",
+                        "group_id": gid,
+                        "message": msg,
+                    }));
+                    return socket.send(Message::Text(frame)).await.is_ok();
+                }
                 if !group_streams.contains_key(&gid) {
-                    group_streams.insert(gid, BroadcastStream::new(state.events.subscribe_group(gid)));
+                    group_streams
+                        .insert(gid, BroadcastStream::new(state.events.subscribe_group(gid)));
                 }
             }
             if cmd.forum == Some(true) && forum_stream.is_none() {
-                *forum_stream = Some(BroadcastStream::new(state.events.subscribe_forum()));
+                *forum_stream = Some(BroadcastStream::new(
+                    state
+                        .events
+                        .subscribe_forum(viewer.is_platform_authenticated()),
+                ));
             }
             let ack = encode_event(&json!({
                 "type": "subscribed",

@@ -24,13 +24,15 @@ export interface ObserverSocketHandlers {
 
 export interface ObserverSocketOptions {
   url?: string;
+  token?: string | null;
   createSocket?: (url: string) => WebSocketLike;
 }
 
 export class ObserverSocketClient {
-  private readonly url: string;
+  private readonly baseUrl: string;
   private readonly createSocket: (url: string) => WebSocketLike;
   private readonly handlers: ObserverSocketHandlers;
+  private authToken: string | null = null;
   private socket: WebSocketLike | null = null;
   private activeGroupId: string | null = null;
   private disposed = false;
@@ -41,7 +43,8 @@ export class ObserverSocketClient {
 
   constructor(handlers: ObserverSocketHandlers, opts: ObserverSocketOptions = {}) {
     this.handlers = handlers;
-    this.url = opts.url ?? buildDefaultWsUrl();
+    this.baseUrl = opts.url ?? buildDefaultWsUrl();
+    this.authToken = opts.token && opts.token.trim() ? opts.token.trim() : null;
     this.createSocket = opts.createSocket ?? ((url) => new WebSocket(url));
   }
 
@@ -50,7 +53,7 @@ export class ObserverSocketClient {
       return;
     }
     this.handlers.onStatusChange(this.hasConnectedOnce ? 'reconnecting' : 'connecting');
-    const ws = this.createSocket(this.url);
+    const ws = this.createSocket(this.buildTargetUrl());
     this.socket = ws;
 
     ws.onopen = () => {
@@ -106,6 +109,29 @@ export class ObserverSocketClient {
     };
   }
 
+  setAuthToken(nextToken: string | null): void {
+    const normalized = nextToken && nextToken.trim() ? nextToken.trim() : null;
+    if (this.authToken === normalized) {
+      return;
+    }
+    this.authToken = normalized;
+    if (this.disposed) {
+      return;
+    }
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.socket) {
+      this.stopPing();
+      const s = this.socket;
+      this.socket = null;
+      s.onclose = null;
+      s.close();
+      this.connect();
+    }
+  }
+
   setActiveGroup(nextGroupId: string | null): void {
     const prevGroupId = this.activeGroupId;
     if (prevGroupId === nextGroupId) {
@@ -146,6 +172,14 @@ export class ObserverSocketClient {
       s.onclose = null;
       s.close();
     }
+  }
+
+  private buildTargetUrl(): string {
+    if (!this.authToken) {
+      return this.baseUrl;
+    }
+    const sep = this.baseUrl.includes('?') ? '&' : '?';
+    return `${this.baseUrl}${sep}token=${encodeURIComponent(this.authToken)}`;
   }
 
   private sendJson(payload: Record<string, unknown>): void {

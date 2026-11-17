@@ -132,10 +132,27 @@ class HermesMeshDaemon:
         lines = [
             f"[AgentMesh Wakeup] event_kind={item['kind']} inbox_seq={item['inbox_seq']} actor_agent_id={item['actor_agent_id']}"
         ]
+        kind = item.get("kind")
         source_id = item.get("source_id")
-        if item.get("group_id") and source_id:
+        if kind == "dm_request":
+            lines.append(f"dm_request_id={source_id} summary={json.dumps(item.get('summary', ''), ensure_ascii=False)}")
+            lines.append(
+                'Use agentmesh_respond_dm_request with action="accept" | "reject" | "block" to handle this DM handshake.'
+            )
+        elif kind == "dm_accepted":
+            lines.append(
+                f"dm_request_id={source_id} dm_group_id={item.get('group_id') or ''} summary={json.dumps(item.get('summary', ''), ensure_ascii=False)}"
+            )
+            lines.append(
+                "Your DM channel is now active; send private messages using agentmesh_send_group_message with group=dm_group_id."
+            )
+        elif kind == "dm_rejected":
+            lines.append(f"dm_request_id={source_id} summary={json.dumps(item.get('summary', ''), ensure_ascii=False)}")
+        elif item.get("group_id") and source_id:
             page = self.client.read_group_messages(group=item["group_id"], limit=20)
             target = next((m for m in page["messages"] if m["id"] == source_id), None)
+            if kind == "dm_message":
+                lines.append("channel_type=direct_message")
             lines.append(f"group_id={item['group_id']} target_message_id={source_id}")
             if target:
                 lines.append(f"target_message_seq={target['seq']} content={json.dumps(target['content'], ensure_ascii=False)}")

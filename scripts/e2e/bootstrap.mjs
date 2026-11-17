@@ -16,24 +16,28 @@ const DESIRED_AGENTS = [
     display_name: 'OpenClaw Alpha',
     framework: 'openclaw',
     description: 'OpenClaw coordinator and IM initiator',
+    capabilities: ['planning', 'im', 'review'],
   },
   {
     slug: 'openclaw-beta',
     display_name: 'OpenClaw Beta',
     framework: 'openclaw',
     description: 'OpenClaw specialist and forum reviewer',
+    capabilities: ['review', 'forum', 'caching'],
   },
   {
     slug: 'hermes-gamma',
     display_name: 'Hermes Gamma',
     framework: 'hermes',
     description: 'Hermes systems analyst and RFC author',
+    capabilities: ['systems', 'rfc', 'postgres'],
   },
   {
     slug: 'hermes-delta',
     display_name: 'Hermes Delta',
     framework: 'hermes',
     description: 'Hermes verifier and thread summarizer',
+    capabilities: ['verification', 'summary', 'qa'],
   },
 ];
 
@@ -161,10 +165,10 @@ async function main() {
     resolvedGroups[spec.slug] = group;
   }
 
-  // Forum board
-  const existingBoardsRes = await fetch(`${AGENTMESH_URL}/api/v1/boards`);
+  // Forum boards (query with ADMIN_TOKEN so platform-restricted boards are visible too)
+  const existingBoardsRes = await api('GET', '/api/v1/boards');
   if (!existingBoardsRes.ok) throw new Error(`GET /api/v1/boards failed: ${existingBoardsRes.status}`);
-  const { boards: existingBoards } = await existingBoardsRes.json();
+  const { boards: existingBoards } = existingBoardsRes.data;
   const boardBySlug = new Map(existingBoards.map((b) => [b.slug, b]));
 
   let rfcBoard = boardBySlug.get('engineering-rfcs');
@@ -173,9 +177,22 @@ async function main() {
       slug: 'engineering-rfcs',
       name: 'Engineering RFCs',
       description: 'Cross-ecosystem proposals, architecture decisions, and review threads',
+      visibility: 'public',
     });
     if (!created.ok) throw new Error(`Failed to create board engineering-rfcs: ${created.status}`);
     rfcBoard = created.data.board;
+  }
+
+  let internalBoard = boardBySlug.get('platform-governance');
+  if (!internalBoard) {
+    const created = await api('POST', '/api/v1/admin/boards', {
+      slug: 'platform-governance',
+      name: '平台架构内参 (成员可见)',
+      description: '仅已登录平台用户与已认证 Agent 可见的深度协同与安全提案板块',
+      visibility: 'platform',
+    });
+    if (!created.ok) throw new Error(`Failed to create board platform-governance: ${created.status}`);
+    internalBoard = created.data.board;
   }
 
   const topologyPath = join(STATE_DIR, 'topology.json');
@@ -185,7 +202,10 @@ async function main() {
       {
         agents: resolvedAgents,
         groups: resolvedGroups,
-        boards: { 'engineering-rfcs': rfcBoard },
+        boards: {
+          'engineering-rfcs': rfcBoard,
+          'platform-governance': internalBoard,
+        },
       },
       null,
       2,
@@ -198,7 +218,7 @@ async function main() {
       event: 'bootstrap_complete',
       agents: Object.keys(resolvedAgents),
       groups: Object.keys(resolvedGroups),
-      boards: ['engineering-rfcs'],
+      boards: ['engineering-rfcs', 'platform-governance'],
     }),
   );
 }

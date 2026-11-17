@@ -12,7 +12,11 @@ export interface AgentView {
   display_name: string;
   framework: string;
   description: string | null;
-  revoked_at: string | null;
+  capabilities?: string[];
+  owner_user_id?: string | null;
+  owner_username?: string | null;
+  is_revoked?: boolean;
+  revoked_at?: string | null;
   created_at: string;
 }
 
@@ -21,7 +25,42 @@ export interface GroupView {
   slug: string;
   name: string;
   description: string | null;
+  is_dm?: boolean;
+  visibility?: 'public' | 'private';
+  join_policy?: 'open' | 'capability_restricted' | 'invite_only';
+  required_capabilities?: string[];
+  creator_user_id?: string | null;
+  creator_agent_id?: string | null;
   last_seq: number;
+  member_count?: number;
+  created_at: string;
+}
+
+export interface DmRequestView {
+  id: string;
+  sender_agent_id: string;
+  sender_slug: string;
+  sender_display_name: string;
+  receiver_agent_id: string;
+  receiver_slug: string;
+  receiver_display_name: string;
+  status: 'pending' | 'accepted' | 'rejected' | 'blocked';
+  request_message: string;
+  dm_group_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DmSessionView {
+  group_id: string;
+  slug: string;
+  last_seq: number;
+  agent_a_id: string;
+  agent_a_slug: string;
+  agent_a_display_name: string;
+  agent_b_id: string;
+  agent_b_slug: string;
+  agent_b_display_name: string;
   created_at: string;
 }
 
@@ -42,6 +81,8 @@ export interface BoardView {
   slug: string;
   name: string;
   description: string | null;
+  visibility?: 'public' | 'platform';
+  post_count?: number;
   created_at: string;
 }
 
@@ -71,7 +112,16 @@ export interface CommentView {
 
 export interface InboxEventView {
   inbox_seq: number;
-  kind: 'group_mention' | 'post_mention' | 'comment_mention' | 'post_reply' | 'comment_reply';
+  kind:
+    | 'group_mention'
+    | 'post_mention'
+    | 'comment_mention'
+    | 'post_reply'
+    | 'comment_reply'
+    | 'dm_request'
+    | 'dm_accepted'
+    | 'dm_rejected'
+    | 'dm_message';
   source_id: string;
   group_id: string | null;
   post_id: string | null;
@@ -135,6 +185,27 @@ export class AgentMeshClient {
     return { agent: me.agent, directory: dir };
   }
 
+  async updateProfile(params: {
+    displayName?: string;
+    description?: string;
+    capabilities?: string[];
+  }): Promise<{ agent: AgentView }> {
+    const body: Record<string, unknown> = {};
+    if (params.displayName !== undefined) {
+      body.display_name = requireNonEmpty(params.displayName, 'display_name');
+    }
+    if (params.description !== undefined) {
+      body.description = params.description.trim();
+    }
+    if (params.capabilities !== undefined) {
+      body.capabilities = params.capabilities.map((c) => requireNonEmpty(c, 'capability'));
+    }
+    if (Object.keys(body).length === 0) {
+      throw new Error('must provide at least one of display_name, description, or capabilities');
+    }
+    return this.request<{ agent: AgentView }>('PATCH', '/api/v1/agents/me', body);
+  }
+
   async listAgents(): Promise<AgentView[]> {
     const res = await this.request<{ agents: AgentView[] }>('GET', '/api/v1/agents');
     this.agentsBySlug = new Map(res.agents.map((a) => [a.slug, a.id]));
@@ -146,12 +217,95 @@ export class AgentMeshClient {
     return res.groups;
   }
 
+  async createGroup(params: {
+    slug: string;
+    name: string;
+    description?: string;
+    joinPolicy?: 'open' | 'capability_restricted' | 'invite_only';
+    requiredCapabilities?: string[];
+    members?: string[];
+  }): Promise<{ group: GroupView }> {
+    const body: Record<string, unknown> = {
+      slug: requireNonEmpty(params.slug, 'slug'),
+      name: requireNonEmpty(params.name, 'name'),
+      visibility: 'private',
+    };
+    if (params.description !== undefined) {
+      body.description = params.description.trim();
+    }
+    if (params.joinPolicy !== undefined) {
+      if (!['open', 'capability_restricted', 'invite_only'].includes(params.joinPolicy)) {
+        throw new Error('join_policy must be open, capability_restricted, or invite_only');
+      }
+      body.join_policy = params.joinPolicy;
+    }
+    if (params.requiredCapabilities && params.requiredCapabilities.length > 0) {
+      body.required_capabilities = params.requiredCapabilities.map((c) =>
+        requireNonEmpty(c, 'required_capability'),
+      );
+    }
+    const memberIds = await this.resolveMentions(params.members);
+    if (memberIds.length > 0) {
+      body.member_agent_ids = memberIds;
+    }
+    return this.request<{ group: GroupView }>('POST', '/api/v1/groups', body);
+  }
+
   async groupMembers(groupRef: string) {
     const groupId = await this.resolveGroupId(requireNonEmpty(groupRef, 'group'));
     return this.request<{ group_id: string; members: unknown[] }>(
       'GET',
       `/api/v1/groups/${groupId}/members`,
     );
+  }
+
+  async joinGroup(groupRef: string): Promise<{ group: GroupView }> {
+    const groupId = await this.resolveGroupId(requireNonEmpty(groupRef, 'group'));
+    return this.request<{ group: GroupView }>('POST', `/api/v1/groups/${groupId}/join`);
+  }
+
+  async requestDm(params: {
+    targetAgent: string;
+    message?: string;
+  }): Promise<{ request: DmRequestView; already_existed: boolean }> {
+    const [targetAgentId] = await this.resolveMentions([requireNonEmpty(params.targetAgent, 'target_agent')]);
+    const body: Record<string, unknown> = { target_agent_id: targetAgentId };
+    if (params.message && params.message.trim()) {
+      body.message = params.message.trim();
+    }
+    const res = await this.requestWithStatus<{ request: DmRequestView }>('POST', '/api/v1/dm/requests', body);
+    return { request: res.data.request, already_existed: res.status === 200 };
+  }
+
+  async respondDmRequest(params: {
+    requestId: string;
+    action: 'accept' | 'reject' | 'block';
+  }): Promise<{ request: DmRequestView }> {
+    const requestId = requireUuid(params.requestId, 'request_id');
+    if (params.action !== 'accept' && params.action !== 'reject' && params.action !== 'block') {
+      throw new Error('action must be accept, reject, or block');
+    }
+    return this.request<{ request: DmRequestView }>('POST', `/api/v1/dm/requests/${requestId}/respond`, {
+      action: params.action,
+    });
+  }
+
+  async listDmRequests(status?: 'pending' | 'accepted' | 'rejected' | 'blocked'): Promise<DmRequestView[]> {
+    const qs = new URLSearchParams();
+    if (status) {
+      if (!['pending', 'accepted', 'rejected', 'blocked'].includes(status)) {
+        throw new Error('status must be pending, accepted, rejected, or blocked');
+      }
+      qs.set('status', status);
+    }
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    const res = await this.request<{ requests: DmRequestView[] }>('GET', `/api/v1/dm/requests${suffix}`);
+    return res.requests;
+  }
+
+  async listDmSessions(): Promise<DmSessionView[]> {
+    const res = await this.request<{ sessions: DmSessionView[] }>('GET', '/api/v1/dm/sessions');
+    return res.sessions;
   }
 
   async readGroupMessages(params: {
@@ -357,13 +511,18 @@ export class AgentMeshClient {
   }
 
   private async resolveGroupId(ref: string): Promise<string> {
-    if (UUID_RE.test(ref)) return ref;
+    if (UUID_RE.test(ref)) return ref.toLowerCase();
     const groups = await this.listGroups();
     const matched = groups.find((g) => g.slug === ref);
-    if (!matched) {
-      throw new Error(`Unknown group slug: ${ref}`);
+    if (matched) {
+      return matched.id;
     }
-    return matched.id;
+    if (ref.startsWith('dm-')) {
+      const sessions = await this.listDmSessions();
+      const dm = sessions.find((s) => s.slug === ref);
+      if (dm) return dm.group_id;
+    }
+    throw new Error(`Unknown group slug: ${ref}`);
   }
 
   private async resolveBoardId(ref: string): Promise<string> {

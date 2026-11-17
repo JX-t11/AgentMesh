@@ -22,12 +22,16 @@ async fn serves_observer_spa_and_isolates_api_404_when_dist_exists() {
         "<!doctype html><html><body>AgentMesh Observer Test Shell</body></html>",
     )
     .expect("write index.html");
-    fs::write(assets_dir.join("app.js"), "console.log('observer-ready');")
-        .expect("write app.js");
+    fs::write(assets_dir.join("app.js"), "console.log('observer-ready');").expect("write app.js");
 
     let app = TestApp::spawn_with_web_dist(temp_dir.clone()).await;
 
-    let root_resp = app.client.get(format!("{}/", app.base_url)).send().await.unwrap();
+    let root_resp = app
+        .client
+        .get(format!("{}/", app.base_url))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(root_resp.status(), 200);
     let root_html = root_resp.text().await.unwrap();
     assert!(root_html.contains("AgentMesh Observer Test Shell"));
@@ -39,16 +43,36 @@ async fn serves_observer_spa_and_isolates_api_404_when_dist_exists() {
         .await
         .unwrap();
     assert_eq!(asset_resp.status(), 200);
-    assert_eq!(asset_resp.text().await.unwrap(), "console.log('observer-ready');");
+    assert_eq!(
+        asset_resp.text().await.unwrap(),
+        "console.log('observer-ready');"
+    );
 
-    let spa_resp = app
-        .client
-        .get(format!("{}/forum/boards", app.base_url))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(spa_resp.status(), 200);
-    assert!(spa_resp.text().await.unwrap().contains("AgentMesh Observer Test Shell"));
+    for path in [
+        "/forum",
+        "/forum/boards",
+        "/categories",
+        "/c/example-category",
+        "/t/example-topic",
+        "/chat",
+        "/chat/example-group",
+        "/docs",
+        "/docs/openclaw",
+        "/docs/hermes",
+    ] {
+        let spa_resp = app
+            .client
+            .get(format!("{}{path}", app.base_url))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(spa_resp.status(), 200, "SPA fallback for {path}");
+        assert_eq!(
+            spa_resp.text().await.unwrap(),
+            root_html,
+            "SPA entry for {path}"
+        );
+    }
 
     let health_resp = app
         .client
@@ -90,7 +114,12 @@ async fn boots_cleanly_when_web_dist_dir_is_missing() {
         .unwrap();
     assert_eq!(health_resp.status(), 200);
 
-    let root_resp = app.client.get(format!("{}/", app.base_url)).send().await.unwrap();
+    let root_resp = app
+        .client
+        .get(format!("{}/", app.base_url))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(root_resp.status(), 404);
 
     let api_404 = app
@@ -117,10 +146,40 @@ async fn real_built_web_dist_and_live_observer_ws_full_flow() {
     let app = TestApp::spawn_with_web_dist(real_dist).await;
 
     // 1. 验证根路径 / 返回真实前端构建的 index.html，且引用的 JS / CSS 静态资源可同源 200 加载
-    let index_resp = app.client.get(format!("{}/", app.base_url)).send().await.unwrap();
+    let index_resp = app
+        .client
+        .get(format!("{}/", app.base_url))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(index_resp.status(), 200);
     let index_html = index_resp.text().await.unwrap();
-    assert!(index_html.contains("AgentMesh · 实时观测台"));
+    assert!(index_html.contains("AgentMesh · Agent 协作社区"));
+    assert!(index_html.contains("meta name=\"color-scheme\" content=\"light dark\""));
+
+    for path in [
+        "/forum",
+        "/categories",
+        "/c/example-category",
+        "/t/example-topic",
+        "/chat",
+        "/chat/example-group-id",
+        "/docs",
+        "/docs/create-agent",
+        "/docs/openclaw",
+        "/docs/hermes",
+        "/docs/collaboration",
+        "/docs/faq",
+    ] {
+        let response = app
+            .client
+            .get(format!("{}{path}", app.base_url))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        assert_eq!(response.text().await.unwrap(), index_html);
+    }
 
     let js_path = extract_attr_path(&index_html, "src=\"", "/assets/")
         .expect("built index.html should reference /assets/*.js");
@@ -143,6 +202,37 @@ async fn real_built_web_dist_and_live_observer_ws_full_flow() {
         .unwrap();
     assert_eq!(css_resp.status(), 200);
     assert!(!css_resp.bytes().await.unwrap().is_empty());
+
+    for framework in ["openclaw", "hermes"] {
+        let package = app
+            .client
+            .get(format!(
+                "{}/downloads/agentmesh-{framework}.tar.gz",
+                app.base_url
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(package.status(), 200);
+        let bytes = package.bytes().await.unwrap();
+        assert!(
+            bytes.starts_with(&[0x1f, 0x8b]),
+            "{framework} download is a gzip archive"
+        );
+
+        let guide = app
+            .client
+            .get(format!("{}/connect/{framework}.md", app.base_url))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(guide.status(), 200);
+        let markdown = guide.text().await.unwrap();
+        assert!(markdown.starts_with("# AgentMesh "));
+        assert!(markdown.contains("agentmesh_whoami"));
+        assert!(markdown.contains("/api/v1/agents/register"));
+        assert!(!markdown.contains("docker build"));
+    }
 
     // 2. 注册 OpenClaw 与 Hermes Agent，创建群组与论坛板块
     let (claw_id, claw_token) = app
@@ -212,7 +302,10 @@ async fn real_built_web_dist_and_live_observer_ws_full_flow() {
     // 4. 真实 Agent 群发 + 引用回复 + 结构化 @，验证实时流与 after_seq 补拉一致
     let m1: Value = app
         .client
-        .post(format!("{}/api/v1/groups/{group_id}/messages", app.base_url))
+        .post(format!(
+            "{}/api/v1/groups/{group_id}/messages",
+            app.base_url
+        ))
         .bearer_auth(&claw_token)
         .json(&json!({
             "client_msg_id": "m2-e2e-1",
@@ -233,7 +326,10 @@ async fn real_built_web_dist_and_live_observer_ws_full_flow() {
 
     let _m2: Value = app
         .client
-        .post(format!("{}/api/v1/groups/{group_id}/messages", app.base_url))
+        .post(format!(
+            "{}/api/v1/groups/{group_id}/messages",
+            app.base_url
+        ))
         .bearer_auth(&hermes_token)
         .json(&json!({
             "client_msg_id": "m2-e2e-2",

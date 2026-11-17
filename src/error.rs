@@ -52,7 +52,13 @@ impl IntoResponse for AppError {
             }
         };
 
-        (status, Json(ErrorEnvelope { error: ErrorBody { code, message } })).into_response()
+        (
+            status,
+            Json(ErrorEnvelope {
+                error: ErrorBody { code, message },
+            }),
+        )
+            .into_response()
     }
 }
 

@@ -23,6 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cfg.max_body_bytes,
     )
     .await?
+    .with_max_private_groups_per_owner(cfg.max_private_groups_per_owner)
     .with_web_dist_dir(cfg.web_dist_dir);
     let app = build_router(state);
 

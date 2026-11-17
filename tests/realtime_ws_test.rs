@@ -42,7 +42,10 @@ async fn inbox_cursor_and_agent_ws_stream_dynamic_groups_and_revocation() {
 
     let page1: Value = app
         .client
-        .get(format!("{}/api/v1/inbox?after_inbox_seq=0&limit=2", app.base_url))
+        .get(format!(
+            "{}/api/v1/inbox?after_inbox_seq=0&limit=2",
+            app.base_url
+        ))
         .bearer_auth(&token_a)
         .send()
         .await
@@ -143,7 +146,9 @@ async fn inbox_cursor_and_agent_ws_stream_dynamic_groups_and_revocation() {
     );
     app.state.events.send_agent(
         agent_a,
-        AgentSignal::Frame(encode_event(&json!({ "type": "inbox_event", "inbox_seq": 4 }))),
+        AgentSignal::Frame(encode_event(
+            &json!({ "type": "inbox_event", "inbox_seq": 4 }),
+        )),
     );
     let next_ev = recv_json(&mut ws).await;
     assert_eq!(next_ev["type"], "inbox_event");
@@ -152,7 +157,10 @@ async fn inbox_cursor_and_agent_ws_stream_dynamic_groups_and_revocation() {
     // 吊销 Agent 凭证，WS 连接立即收到关闭
     let rev = app
         .client
-        .post(format!("{}/api/v1/admin/agents/{agent_a}/revoke", app.base_url))
+        .post(format!(
+            "{}/api/v1/admin/agents/{agent_a}/revoke",
+            app.base_url
+        ))
         .bearer_auth(TEST_ADMIN_TOKEN)
         .send()
         .await
@@ -214,9 +222,9 @@ async fn observer_stream_and_slow_consumer_resync_required() {
     assert_eq!(sub_ack["forum"], true);
 
     // 论坛事件实时送达
-    app.state
-        .events
-        .publish_forum(encode_event(&json!({ "type": "post_created", "title": "hello" })));
+    app.state.events.publish_forum(encode_event(
+        &json!({ "type": "post_created", "title": "hello" }),
+    ));
     let forum_ev = recv_json(&mut obs_ws).await;
     assert_eq!(forum_ev["type"], "post_created");
 
@@ -242,7 +250,10 @@ async fn observer_stream_and_slow_consumer_resync_required() {
             break;
         }
     }
-    assert!(saw_resync, "expected slow consumer to receive resync_required frame");
+    assert!(
+        saw_resync,
+        "expected slow consumer to receive resync_required frame"
+    );
 
     app.cleanup().await;
 }

@@ -84,6 +84,27 @@ class AgentMeshClient:
         directory = self.list_agents()
         return {"agent": me["agent"], "directory": directory}
 
+    def update_profile(
+        self,
+        display_name: Optional[str] = None,
+        description: Optional[str] = None,
+        capabilities: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        body: Dict[str, Any] = {}
+        if display_name is not None:
+            body["display_name"] = _require_non_empty(display_name, "display_name")
+        if description is not None:
+            if not isinstance(description, str):
+                raise ValueError("description must be a string")
+            body["description"] = description.strip()
+        if capabilities is not None:
+            if not isinstance(capabilities, list):
+                raise ValueError("capabilities must be a list of strings")
+            body["capabilities"] = [_require_non_empty(c, "capability") for c in capabilities]
+        if not body:
+            raise ValueError("must provide at least one of display_name, description, or capabilities")
+        return self._request("PATCH", "/api/v1/agents/me", body)
+
     def list_agents(self) -> List[Dict[str, Any]]:
         res = self._request("GET", "/api/v1/agents")
         agents = res["agents"]
@@ -93,9 +114,72 @@ class AgentMeshClient:
     def list_groups(self) -> List[Dict[str, Any]]:
         return self._request("GET", "/api/v1/groups")["groups"]
 
+    def create_group(
+        self,
+        slug: str,
+        name: str,
+        description: Optional[str] = None,
+        join_policy: Optional[str] = None,
+        required_capabilities: Optional[List[str]] = None,
+        members: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        body: Dict[str, Any] = {
+            "slug": _require_non_empty(slug, "slug"),
+            "name": _require_non_empty(name, "name"),
+            "visibility": "private",
+        }
+        if description is not None:
+            if not isinstance(description, str):
+                raise ValueError("description must be a string")
+            body["description"] = description.strip()
+        if join_policy is not None:
+            if join_policy not in {"open", "capability_restricted", "invite_only"}:
+                raise ValueError("join_policy must be 'open', 'capability_restricted', or 'invite_only'")
+            body["join_policy"] = join_policy
+        if required_capabilities:
+            if not isinstance(required_capabilities, list):
+                raise ValueError("required_capabilities must be a list of strings")
+            body["required_capabilities"] = [
+                _require_non_empty(c, "required_capability") for c in required_capabilities
+            ]
+        resolved_members = self._resolve_mentions(members)
+        if resolved_members:
+            body["member_agent_ids"] = resolved_members
+        return self._request("POST", "/api/v1/groups", body)
+
     def group_members(self, group_ref: str) -> Dict[str, Any]:
         group_id = self._resolve_group_id(_require_non_empty(group_ref, "group"))
         return self._request("GET", f"/api/v1/groups/{group_id}/members")
+
+    def join_group(self, group_ref: str) -> Dict[str, Any]:
+        group_id = self._resolve_group_id(_require_non_empty(group_ref, "group"))
+        return self._request("POST", f"/api/v1/groups/{group_id}/join")
+
+    def request_dm(self, target_agent: str, message: Optional[str] = None) -> Dict[str, Any]:
+        resolved = self._resolve_mentions([_require_non_empty(target_agent, "target_agent")])
+        body: Dict[str, Any] = {"target_agent_id": resolved[0]}
+        if message and str(message).strip():
+            body["message"] = str(message).strip()
+        status, data = self._request_with_status("POST", "/api/v1/dm/requests", body)
+        return {"request": data["request"], "already_existed": status == 200}
+
+    def respond_dm_request(self, request_id: str, action: str) -> Dict[str, Any]:
+        clean_id = _require_uuid(request_id, "request_id")
+        if action not in {"accept", "reject", "block"}:
+            raise ValueError("action must be 'accept', 'reject', or 'block'")
+        return self._request("POST", f"/api/v1/dm/requests/{clean_id}/respond", {"action": action})
+
+    def list_dm_requests(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        params: Dict[str, str] = {}
+        if status is not None:
+            if status not in {"pending", "accepted", "rejected", "blocked"}:
+                raise ValueError("status must be 'pending', 'accepted', 'rejected', or 'blocked'")
+            params["status"] = status
+        qs = f"?{urllib.parse.urlencode(params)}" if params else ""
+        return self._request("GET", f"/api/v1/dm/requests{qs}")["requests"]
+
+    def list_dm_sessions(self) -> List[Dict[str, Any]]:
+        return self._request("GET", "/api/v1/dm/sessions")["sessions"]
 
     def read_group_messages(
         self,
@@ -255,6 +339,10 @@ class AgentMeshClient:
         for g in self.list_groups():
             if g.get("slug") == ref:
                 return g["id"]
+        if ref.startswith("dm-"):
+            for s in self.list_dm_sessions():
+                if s.get("slug") == ref:
+                    return s["group_id"]
         raise ValueError(f"Unknown group slug: {ref}")
 
     def _resolve_board_id(self, ref: str) -> str:

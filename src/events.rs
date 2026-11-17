@@ -17,18 +17,21 @@ pub struct EventHub {
     capacity: usize,
     group_channels: DashMap<Uuid, broadcast::Sender<Utf8Bytes>>,
     agent_channels: DashMap<Uuid, broadcast::Sender<AgentSignal>>,
-    forum_tx: broadcast::Sender<Utf8Bytes>,
+    forum_public_tx: broadcast::Sender<Utf8Bytes>,
+    forum_all_tx: broadcast::Sender<Utf8Bytes>,
 }
 
 impl EventHub {
     pub fn new(capacity: usize) -> Self {
         let cap = capacity.max(1);
-        let (forum_tx, _) = broadcast::channel(cap);
+        let (forum_public_tx, _) = broadcast::channel(cap);
+        let (forum_all_tx, _) = broadcast::channel(cap);
         Self {
             capacity: cap,
             group_channels: DashMap::new(),
             agent_channels: DashMap::new(),
-            forum_tx,
+            forum_public_tx,
+            forum_all_tx,
         }
     }
 
@@ -68,12 +71,23 @@ impl EventHub {
             .remove_if(&agent_id, |_, tx| tx.receiver_count() == 0);
     }
 
-    pub fn subscribe_forum(&self) -> broadcast::Receiver<Utf8Bytes> {
-        self.forum_tx.subscribe()
+    pub fn subscribe_forum(&self, include_platform: bool) -> broadcast::Receiver<Utf8Bytes> {
+        if include_platform {
+            self.forum_all_tx.subscribe()
+        } else {
+            self.forum_public_tx.subscribe()
+        }
     }
 
     pub fn publish_forum(&self, frame: Utf8Bytes) {
-        let _ = self.forum_tx.send(frame);
+        self.publish_forum_scoped(frame, true);
+    }
+
+    pub fn publish_forum_scoped(&self, frame: Utf8Bytes, is_public: bool) {
+        if is_public {
+            let _ = self.forum_public_tx.send(frame.clone());
+        }
+        let _ = self.forum_all_tx.send(frame);
     }
 
     #[cfg(test)]
@@ -119,7 +133,6 @@ mod tests {
         let f1 = rx1.recv().await.unwrap();
         let f2 = rx2.recv().await.unwrap();
 
-        // 验证多订阅者共享同一底层内存块（零重复拷贝/序列化）
         assert_eq!(f1.as_str().as_ptr(), src_ptr);
         assert_eq!(f2.as_str().as_ptr(), src_ptr);
 
@@ -142,19 +155,31 @@ mod tests {
 
         for seq in 1..=7 {
             hub.publish_group(group_id, encode_event(&json!({ "seq": seq })));
-            // 快消费者实时跟进
             let msg = fast_rx.recv().await.unwrap();
             assert!(msg.as_str().contains(&format!("\"seq\":{seq}")));
         }
 
-        // 慢消费者超出了容量 4，收到精确的 Lagged(3)
         match slow_rx.recv().await {
             Err(RecvError::Lagged(dropped)) => assert_eq!(dropped, 3),
             other => panic!("expected Lagged(3), got {other:?}"),
         }
 
-        // 随后慢消费者仍能继续读取环形缓冲中保留的最新消息
         let next = slow_rx.recv().await.unwrap();
         assert!(next.as_str().contains("\"seq\":4"));
+    }
+
+    #[tokio::test]
+    async fn forum_visibility_channels_isolate_platform_events_from_public_subscribers() {
+        let hub = EventHub::new(8);
+        let mut pub_rx = hub.subscribe_forum(false);
+        let mut all_rx = hub.subscribe_forum(true);
+
+        hub.publish_forum_scoped(encode_event(&json!({ "post": "internal" })), false);
+        assert!(pub_rx.try_recv().is_err());
+        assert!(all_rx.recv().await.unwrap().as_str().contains("internal"));
+
+        hub.publish_forum_scoped(encode_event(&json!({ "post": "public" })), true);
+        assert!(pub_rx.recv().await.unwrap().as_str().contains("public"));
+        assert!(all_rx.recv().await.unwrap().as_str().contains("public"));
     }
 }

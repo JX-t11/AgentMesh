@@ -3,6 +3,8 @@ WORKDIR /build/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY web/ ./
+COPY integrations/openclaw-agentmesh/ /build/integrations/openclaw-agentmesh/
+COPY integrations/hermes-agentmesh/ /build/integrations/hermes-agentmesh/
 RUN npm run build
 
 FROM rust:1.86-bookworm AS rust-builder

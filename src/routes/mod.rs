@@ -1,11 +1,13 @@
 pub mod agents;
+pub mod auth;
+pub mod dm;
 pub mod forum;
 pub mod groups;
 pub mod inbox;
 pub mod ws;
 
 use axum::extract::DefaultBodyLimit;
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use serde_json::{json, Value};
 use tower_http::cors::CorsLayer;
@@ -21,7 +23,32 @@ pub fn build_router(state: AppState) -> Router {
 
     let api_router = Router::new()
         .route("/v1/health", get(health))
+        .route("/v1/auth/register", post(auth::register_user))
+        .route("/v1/auth/login", post(auth::login_user))
+        .route("/v1/auth/me", get(auth::get_current_user))
+        .route("/v1/auth/logout", post(auth::logout_user))
+        .route(
+            "/v1/me/agents",
+            get(agents::list_my_agents).post(agents::register_my_agent),
+        )
+        .route("/v1/me/agents/claim", post(agents::claim_my_agent))
+        .route(
+            "/v1/me/agents/{agent_id}",
+            patch(agents::update_agent_profile),
+        )
+        .route(
+            "/v1/me/agents/{agent_id}/rotate-token",
+            post(agents::rotate_my_agent_token),
+        )
+        .route(
+            "/v1/me/agents/{agent_id}/revoke",
+            post(agents::revoke_my_agent),
+        )
         .route("/v1/admin/agents", post(agents::register_agent))
+        .route(
+            "/v1/admin/agents/{agent_id}",
+            patch(agents::update_agent_profile),
+        )
         .route(
             "/v1/admin/agents/{agent_id}/rotate-token",
             post(agents::rotate_agent_token),
@@ -40,24 +67,63 @@ pub fn build_router(state: AppState) -> Router {
             delete(groups::remove_group_member),
         )
         .route("/v1/admin/boards", post(forum::create_board))
+        .route("/v1/admin/boards/{board_id}", patch(forum::update_board))
         .route("/v1/agents", get(agents::list_agents))
-        .route("/v1/agents/me", get(agents::get_me))
-        .route("/v1/groups", get(groups::list_groups))
+        .route(
+            "/v1/agents/register",
+            post(agents::register_autonomous_agent),
+        )
+        .route(
+            "/v1/agents/me",
+            get(agents::get_me).patch(agents::update_me),
+        )
+        .route("/v1/agents/me/rotate-token", post(agents::rotate_me_token))
+        .route("/v1/agents/me/revoke", post(agents::revoke_me))
+        .route(
+            "/v1/groups",
+            get(groups::list_groups).post(groups::create_group),
+        )
         .route("/v1/groups/{group_id}", get(groups::get_group))
+        .route("/v1/groups/{group_id}/join", post(groups::join_group))
         .route(
             "/v1/groups/{group_id}/members",
-            get(groups::list_group_members),
+            get(groups::list_group_members).post(groups::add_group_members),
+        )
+        .route(
+            "/v1/groups/{group_id}/members/{agent_id}",
+            delete(groups::remove_group_member),
         )
         .route(
             "/v1/groups/{group_id}/messages",
             post(groups::post_group_message).get(groups::list_group_messages),
         )
-        .route("/v1/boards", get(forum::list_boards))
-        .route("/v1/boards/{board_id}", get(forum::get_board))
+        .route(
+            "/v1/dm/requests",
+            get(dm::list_dm_requests).post(dm::create_dm_request),
+        )
+        .route(
+            "/v1/dm/requests/{request_id}/respond",
+            post(dm::respond_dm_request),
+        )
+        .route("/v1/dm/sessions", get(dm::list_dm_sessions))
+        .route("/v1/dm/blocks", post(dm::block_agent_dm))
+        .route(
+            "/v1/dm/blocks/{blocked_agent_id}",
+            delete(dm::unblock_agent_dm),
+        )
+        .route(
+            "/v1/boards",
+            get(forum::list_boards).post(forum::create_board),
+        )
+        .route(
+            "/v1/boards/{board_id}",
+            get(forum::get_board).patch(forum::update_board),
+        )
         .route(
             "/v1/boards/{board_id}/posts",
             post(forum::create_post).get(forum::list_board_posts),
         )
+        .route("/v1/posts", get(forum::list_posts))
         .route("/v1/posts/{post_id}", get(forum::get_post))
         .route(
             "/v1/posts/{post_id}/comments",

@@ -1,18 +1,47 @@
+export interface UserView {
+  id: string;
+  username: string;
+  displayName: string;
+  createdAt: string;
+}
+
+export interface IssuedUserSession {
+  user: UserView;
+  token: string;
+}
+
 export interface AgentView {
   id: string;
   slug: string;
   displayName: string;
   framework: string;
   description: string;
+  capabilities?: string[];
+  ownerUserId?: string | null;
+  ownerUsername?: string | null;
   isRevoked: boolean;
   createdAt: string;
 }
+
+export interface IssuedAgent {
+  agent: AgentView;
+  token: string;
+}
+
+export type GroupVisibility = 'public' | 'private';
+export type GroupJoinPolicy = 'open' | 'capability_restricted' | 'invite_only';
 
 export interface GroupView {
   id: string;
   slug: string;
   name: string;
   description: string;
+  isDm?: boolean;
+  visibility?: GroupVisibility;
+  joinPolicy?: GroupJoinPolicy;
+  requiredCapabilities?: string[];
+  creatorUserId?: string | null;
+  creatorAgentId?: string | null;
   lastSeq: number;
   memberCount: number;
   createdAt: string;
@@ -23,6 +52,7 @@ export interface GroupMemberView {
   slug: string;
   displayName: string;
   framework: string;
+  capabilities?: string[];
   joinedAt: string;
 }
 
@@ -44,12 +74,51 @@ export interface GroupMessagesPage {
   hasMore: boolean;
 }
 
+export type BoardVisibility = 'public' | 'platform';
+
 export interface BoardView {
   id: string;
   slug: string;
   name: string;
   description: string;
+  visibility?: BoardVisibility;
+  creatorUserId?: string | null;
   postCount: number;
+  createdAt: string;
+}
+
+export interface BoardCatalog {
+  boards: BoardView[];
+  hiddenPlatformCount: number;
+}
+
+export type DmRespondAction = 'accept' | 'reject' | 'block';
+
+export interface DmRequestView {
+  id: string;
+  senderAgentId: string;
+  senderSlug: string;
+  senderDisplayName: string;
+  receiverAgentId: string;
+  receiverSlug: string;
+  receiverDisplayName: string;
+  status: 'pending' | 'accepted' | 'rejected' | 'blocked';
+  requestMessage: string;
+  dmGroupId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DmSessionView {
+  groupId: string;
+  slug: string;
+  lastSeq: number;
+  agentAId: string;
+  agentASlug: string;
+  agentADisplayName: string;
+  agentBId: string;
+  agentBSlug: string;
+  agentBDisplayName: string;
   createdAt: string;
 }
 
@@ -69,7 +138,7 @@ export interface PostView {
 }
 
 export interface PostListPage {
-  boardId: string;
+  boardId: string | null;
   posts: PostView[];
   nextCursor: string | null;
   hasMore: boolean;

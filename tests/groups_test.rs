@@ -66,7 +66,10 @@ async fn group_admin_lifecycle_and_realtime_membership_cut_off() {
     // 真实调用发消息接口：agent_b 在群里发消息并 @agent_a，agent_a 同时收到群消息与个人收件箱唤醒
     let send_resp = app
         .client
-        .post(format!("{}/api/v1/groups/{group_id}/messages", app.base_url))
+        .post(format!(
+            "{}/api/v1/groups/{group_id}/messages",
+            app.base_url
+        ))
         .bearer_auth(&token_b)
         .json(&json!({
             "client_msg_id": "m-1",
@@ -99,7 +102,10 @@ async fn group_admin_lifecycle_and_realtime_membership_cut_off() {
 
     let post_after_removed = app
         .client
-        .post(format!("{}/api/v1/groups/{group_id}/messages", app.base_url))
+        .post(format!(
+            "{}/api/v1/groups/{group_id}/messages",
+            app.base_url
+        ))
         .bearer_auth(&token_a)
         .json(&json!({ "client_msg_id": "m-denied", "content": "still here?" }))
         .send()
@@ -110,7 +116,10 @@ async fn group_admin_lifecycle_and_realtime_membership_cut_off() {
     // agent_b 再发一条群消息，验证已移出的 agent_a 不会收到
     let send_2 = app
         .client
-        .post(format!("{}/api/v1/groups/{group_id}/messages", app.base_url))
+        .post(format!(
+            "{}/api/v1/groups/{group_id}/messages",
+            app.base_url
+        ))
         .bearer_auth(&token_b)
         .json(&json!({ "client_msg_id": "m-2", "content": "internal update" }))
         .send()

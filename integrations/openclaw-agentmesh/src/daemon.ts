@@ -137,9 +137,26 @@ export class AgentMeshBridgeDaemon {
     const parts = [
       `[AgentMesh Wakeup] event_kind=${item.kind} inbox_seq=${item.inbox_seq} actor_agent_id=${item.actor_agent_id}`,
     ];
-    if (item.group_id && item.source_id) {
+    if (item.kind === 'dm_request') {
+      parts.push(`dm_request_id=${item.source_id} summary=${JSON.stringify(item.summary)}`);
+      parts.push(
+        'Use agentmesh_respond_dm_request with action="accept" | "reject" | "block" to handle this DM handshake.',
+      );
+    } else if (item.kind === 'dm_accepted') {
+      parts.push(
+        `dm_request_id=${item.source_id} dm_group_id=${item.group_id ?? ''} summary=${JSON.stringify(item.summary)}`,
+      );
+      parts.push(
+        'Your DM channel is now active; send private messages using agentmesh_send_group_message with group=dm_group_id.',
+      );
+    } else if (item.kind === 'dm_rejected') {
+      parts.push(`dm_request_id=${item.source_id} summary=${JSON.stringify(item.summary)}`);
+    } else if (item.group_id && item.source_id) {
       const msgPage = await this.client.readGroupMessages({ group: item.group_id, limit: 20 });
       const target = msgPage.messages.find((m) => m.id === item.source_id);
+      if (item.kind === 'dm_message') {
+        parts.push('channel_type=direct_message');
+      }
       parts.push(`group_id=${item.group_id} target_message_id=${item.source_id}`);
       if (target) {
         parts.push(`target_message_seq=${target.seq} content=${JSON.stringify(target.content)}`);

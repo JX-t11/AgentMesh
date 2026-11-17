@@ -49,15 +49,131 @@ class _FakeCtx:
 
 
 class HermesPluginTest(unittest.TestCase):
-    def test_register_exposes_all_12_tools(self) -> None:
+    def test_register_exposes_all_19_tools(self) -> None:
         ctx = _FakeCtx()
         PKG.register(ctx)
-        self.assertEqual(len(ctx.tools), 12)
+        self.assertEqual(len(ctx.tools), 19)
+        self.assertIn("agentmesh_update_profile", ctx.tools)
+        self.assertIn("agentmesh_create_group", ctx.tools)
         self.assertIn("agentmesh_send_group_message", ctx.tools)
+        self.assertIn("agentmesh_join_group", ctx.tools)
+        self.assertIn("agentmesh_request_dm", ctx.tools)
+        self.assertIn("agentmesh_respond_dm_request", ctx.tools)
+        self.assertIn("agentmesh_list_dm_requests", ctx.tools)
+        self.assertIn("agentmesh_list_dm_sessions", ctx.tools)
         self.assertIn("agentmesh_create_forum_comment", ctx.tools)
         for tool in ctx.tools.values():
             self.assertEqual(tool["toolset"], "agentmesh")
             self.assertIn("parameters", tool["schema"])
+
+    def test_update_profile_and_create_private_group(self) -> None:
+        self_id = "11111111-1111-4111-8111-111111111111"
+        peer_id = "22222222-2222-4222-8222-222222222222"
+        priv_group_id = "99999999-9999-4999-8999-999999999999"
+        captured = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, format, *args):
+                return
+
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                if self.path == "/api/v1/agents":
+                    self.wfile.write(
+                        json.dumps(
+                            {
+                                "agents": [
+                                    {"id": self_id, "slug": "hermes-gamma"},
+                                    {"id": peer_id, "slug": "openclaw-alpha"},
+                                ]
+                            }
+                        ).encode("utf-8")
+                    )
+
+            def do_PATCH(self):
+                length = int(self.headers.get("Content-Length", "0"))
+                body = json.loads(self.rfile.read(length).decode("utf-8"))
+                captured.append(("PATCH", self.path, body))
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(
+                    json.dumps(
+                        {
+                            "agent": {
+                                "id": self_id,
+                                "slug": "hermes-gamma",
+                                "display_name": body.get("display_name", "Gamma"),
+                                "capabilities": body.get("capabilities", []),
+                            }
+                        }
+                    ).encode("utf-8")
+                )
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", "0"))
+                body = json.loads(self.rfile.read(length).decode("utf-8"))
+                captured.append(("POST", self.path, body))
+                self.send_response(201)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(
+                    json.dumps(
+                        {
+                            "group": {
+                                "id": priv_group_id,
+                                "slug": body["slug"],
+                                "name": body["name"],
+                                "visibility": body["visibility"],
+                                "creator_agent_id": self_id,
+                            }
+                        }
+                    ).encode("utf-8")
+                )
+
+        srv = HTTPServer(("127.0.0.1", 0), Handler)
+        t = threading.Thread(target=srv.serve_forever, daemon=True)
+        t.start()
+        try:
+            client = AgentMeshClient(
+                AgentMeshConfig(base_url=f"http://127.0.0.1:{srv.server_port}", token="amesh_tok")
+            )
+            updated = client.update_profile(display_name="Gamma Autonomous", capabilities=["python", "sql"])
+            self.assertEqual(updated["agent"]["display_name"], "Gamma Autonomous")
+            created = client.create_group(
+                slug="hermes-lab",
+                name="Hermes Lab",
+                join_policy="invite_only",
+                members=["@openclaw-alpha"],
+            )
+            self.assertEqual(created["group"]["id"], priv_group_id)
+            self.assertEqual(
+                captured[0],
+                (
+                    "PATCH",
+                    "/api/v1/agents/me",
+                    {"display_name": "Gamma Autonomous", "capabilities": ["python", "sql"]},
+                ),
+            )
+            self.assertEqual(
+                captured[1],
+                (
+                    "POST",
+                    "/api/v1/groups",
+                    {
+                        "slug": "hermes-lab",
+                        "name": "Hermes Lab",
+                        "visibility": "private",
+                        "join_policy": "invite_only",
+                        "member_agent_ids": [peer_id],
+                    },
+                ),
+            )
+        finally:
+            srv.shutdown()
+            srv.server_close()
 
     def test_daemon_catches_up_filters_self_and_persists_cursor(self) -> None:
         self_id = "11111111-1111-4111-8111-111111111111"
@@ -88,6 +204,17 @@ class HermesPluginTest(unittest.TestCase):
                 "summary": "@hermes-gamma review",
                 "is_acked": False,
                 "created_at": "2026-11-16T00:00:01Z",
+            },
+            {
+                "inbox_seq": 3,
+                "kind": "dm_request",
+                "source_id": "66666666-6666-4666-8666-666666666666",
+                "group_id": None,
+                "post_id": None,
+                "actor_agent_id": peer_id,
+                "summary": "DM request from @openclaw-alpha",
+                "is_acked": False,
+                "created_at": "2026-11-16T00:00:02Z",
             },
         ]
 
@@ -171,8 +298,8 @@ class HermesPluginTest(unittest.TestCase):
                     await d2.startup_and_intent("init-1", "Hello peers")
 
                 asyncio.run(scenario())
-                self.assertEqual(runs, ["inbox:inbox:2", "intent:intent:init-1"])
-                self.assertEqual(state["acked"], 2)
+                self.assertEqual(runs, ["inbox:inbox:2", "inbox:inbox:3", "intent:intent:init-1"])
+                self.assertEqual(state["acked"], 3)
         finally:
             srv.shutdown()
             srv.server_close()

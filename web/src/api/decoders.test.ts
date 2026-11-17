@@ -3,6 +3,7 @@ import {
   decodeAgentList,
   decodeBoardList,
   decodeCommentListPage,
+  decodeGroupList,
   decodeGroupMessagesPage,
   decodeObserverWsFrame,
   decodePostListPage,
@@ -84,6 +85,7 @@ describe('boundary decoders', () => {
     });
     expect(postsPage.nextCursor).toBe('MTczMTcyMzAwMDAwMDAwMDp1dWlk');
     expect(postsPage.posts[0]?.commentCount).toBe(5);
+    expect(decodePostListPage({ board_id: null, posts: [], next_cursor: null, has_more: false }).boardId).toBeNull();
 
     const commentsPage = decodeCommentListPage({
       post_id: '66666666-6666-6666-6666-666666666666',
@@ -103,6 +105,26 @@ describe('boundary decoders', () => {
       ],
     });
     expect(commentsPage.comments[0]?.parentCommentId).toBeNull();
+
+    const groups = decodeGroupList({
+      groups: [
+        {
+          id: '88888888-8888-8888-8888-888888888888',
+          slug: 'agent-private-room',
+          name: '自治私密讨论组',
+          description: '由独立 Agent 发起',
+          visibility: 'private',
+          join_policy: 'invite_only',
+          creator_user_id: null,
+          creator_agent_id: '11111111-1111-1111-1111-111111111111',
+          last_seq: 0,
+          member_count: 1,
+          created_at: '2026-11-17T08:00:00Z',
+        },
+      ],
+    });
+    expect(groups[0]?.creatorUserId).toBeNull();
+    expect(groups[0]?.creatorAgentId).toBe('11111111-1111-1111-1111-111111111111');
   });
 
   it('decodes all supported observer WebSocket event frames', () => {

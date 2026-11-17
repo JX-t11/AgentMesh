@@ -6,6 +6,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 const protocolOnly = !process.argv.includes('--real-llm');
 const port = Number(process.env.AGENTMESH_E2E_PORT ?? 18893);
 const baseUrl = `http://127.0.0.1:${port}`;
+const adminToken = process.env.ADMIN_TOKEN ?? 'amesh_admin_dev_secret_change_me';
 const runId = `e2e-${randomUUID().slice(0, 8)}`;
 const keepUp = process.argv.includes('--keep-up');
 
@@ -142,6 +143,11 @@ async function main() {
     const { data: boardsRes } = await apiJson('/api/v1/boards');
     const rfcBoard = boardsRes.boards.find((b) => b.slug === 'engineering-rfcs');
     assert.ok(rfcBoard, 'engineering-rfcs board exists');
+    assert.ok(
+      !boardsRes.boards.some((b) => b.slug === 'platform-governance'),
+      'platform-governance board must be hidden from anonymous viewer',
+    );
+    assert.ok((boardsRes.hidden_platform_count ?? 0) >= 1, 'anonymous viewer sees hidden_platform_count >= 1');
 
     const { data: agentsRes } = await apiJson('/api/v1/agents');
     const agentBySlug = new Map(agentsRes.agents.map((a) => [a.slug, a]));
@@ -292,9 +298,245 @@ async function main() {
     const { data: afterRestartPost } = await apiJson(`/api/v1/posts/${forumPost.id}`);
     assert.equal(afterRestartPost.post.comment_count, 3);
 
+    // 6. Platform user governance, capability-gated group join, and strict-privacy 1v1 DM handshake
+    const betaCred = await readAgentCred('openclaw-beta');
+    const regRes = await apiJson('/api/v1/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: 'platform-architect',
+        display_name: 'Platform Architect',
+        password: 'e2e-password-2026',
+      }),
+    });
+    assert.equal(regRes.status, 201);
+    const userToken = regRes.data.token;
+    assert.match(userToken, /^umesh_/);
+
+    const authedBoards = await apiJson('/api/v1/boards', {
+      headers: { Authorization: `Bearer ${userToken}` },
+    });
+    assert.equal(authedBoards.status, 200);
+    assert.equal(authedBoards.data.hidden_platform_count, 0);
+    const govBoard = authedBoards.data.boards.find((b) => b.slug === 'platform-governance');
+    assert.ok(govBoard, 'logged-in user unlocks platform-governance board');
+
+    const govPost = await apiJson(`/api/v1/boards/${govBoard.id}/posts`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${alphaCred.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        client_req_id: `${runId}-gov-post`,
+        title: `Governance Charter ${runId}`,
+        content: 'Platform-scoped architecture charter authored strictly by an authenticated Agent.',
+      }),
+    });
+    assert.equal(govPost.status, 201);
+    const anonGovPost = await apiJson(`/api/v1/posts/${govPost.data.post.id}`);
+    assert.equal(anonGovPost.status, 403, 'anonymous viewer cannot read platform-scoped post');
+
+    const userBoardAttempt = await apiJson('/api/v1/boards', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${userToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        slug: 'unauthorized-board',
+        name: 'Unauthorized Board',
+        visibility: 'public',
+      }),
+    });
+    assert.equal(userBoardAttempt.status, 403, 'ordinary user cannot create forum boards');
+
+    const userPublicGroupAttempt = await apiJson('/api/v1/groups', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${userToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        slug: 'postgres-tuning',
+        name: 'PostgreSQL Tuning Guild',
+        visibility: 'public',
+        join_policy: 'capability_restricted',
+        required_capabilities: ['postgres'],
+      }),
+    });
+    assert.equal(userPublicGroupAttempt.status, 403, 'ordinary user cannot create public groups');
+
+    const capGroupRes = await apiJson('/api/v1/groups', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${adminToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        slug: 'postgres-tuning',
+        name: 'PostgreSQL Tuning Guild',
+        description: 'Capability-restricted guild for agents tagged with postgres',
+        visibility: 'public',
+        join_policy: 'capability_restricted',
+        required_capabilities: ['postgres'],
+      }),
+    });
+    assert.equal(capGroupRes.status, 201);
+    const capGroup = capGroupRes.data.group;
+
+    // Autonomous human-account-free Agent registration, self-governance, and 3-private-group quota
+    const autoAgentRes = await apiJson('/api/v1/agents/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        slug: `solo-agent-${runId}`,
+        display_name: 'Solo Autonomous Agent',
+        framework: 'hermes',
+        description: 'Registered without human account',
+        capabilities: ['postgres'],
+      }),
+    });
+    assert.equal(autoAgentRes.status, 201);
+    const soloToken = autoAgentRes.data.token;
+    assert.match(soloToken, /^amesh_/);
+    assert.equal(autoAgentRes.data.agent.owner_user_id, null);
+
+    const soloPatchRes = await apiJson('/api/v1/agents/me', {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${soloToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ capabilities: ['postgres', 'rust'] }),
+    });
+    assert.equal(soloPatchRes.status, 200);
+
+    for (let idx = 1; idx <= 3; idx += 1) {
+      const privRes = await apiJson('/api/v1/groups', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${soloToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          slug: `solo-priv-${idx}-${runId}`,
+          name: `Solo Private Room ${idx}`,
+          visibility: 'private',
+          join_policy: 'invite_only',
+        }),
+      });
+      assert.equal(privRes.status, 201, `autonomous agent private group #${idx}`);
+    }
+    const overQuotaRes = await apiJson('/api/v1/groups', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${soloToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        slug: `solo-priv-4-${runId}`,
+        name: 'Solo Private Room 4',
+        visibility: 'private',
+        join_policy: 'invite_only',
+      }),
+    });
+    assert.equal(overQuotaRes.status, 403, '4th private group must be blocked by 3-group quota');
+
+    const betaJoin = await apiJson(`/api/v1/groups/${capGroup.id}/join`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${betaCred.token}` },
+    });
+    assert.equal(betaJoin.status, 403, 'agent missing required capability must be rejected');
+
+    const gammaJoin = await apiJson(`/api/v1/groups/${capGroup.id}/join`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${gammaCred.token}` },
+    });
+    assert.equal(gammaJoin.status, 200, 'agent with postgres capability joins self-service');
+
+    const curatorRes = await apiJson('/api/v1/me/agents', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${userToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        slug: 'arch-curator',
+        display_name: 'Arch Curator',
+        framework: 'openclaw',
+        description: 'User-hosted architecture curator agent',
+        capabilities: ['architecture', 'review'],
+      }),
+    });
+    assert.equal(curatorRes.status, 201);
+
+    const auditorRes = await apiJson('/api/v1/me/agents', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${userToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        slug: 'sec-auditor',
+        display_name: 'Sec Auditor',
+        framework: 'hermes',
+        description: 'User-hosted security auditor agent',
+        capabilities: ['security', 'audit'],
+      }),
+    });
+    assert.equal(auditorRes.status, 201);
+
+    const dmReqRes = await apiJson('/api/v1/dm/requests', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${curatorRes.data.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        target_agent_id: auditorRes.data.agent.id,
+        message: 'Requesting 1-on-1 channel to review token rotation policy.',
+      }),
+    });
+    assert.equal(dmReqRes.status, 201);
+
+    const dmAcceptRes = await apiJson(`/api/v1/dm/requests/${dmReqRes.data.request.id}/respond`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${userToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ action: 'accept' }),
+    });
+    assert.equal(dmAcceptRes.status, 200);
+    const dmGroupId = dmAcceptRes.data.request.dm_group_id;
+    assert.ok(dmGroupId, 'accepted DM handshake yields dm_group_id');
+
+    const dmMsgRes = await apiJson(`/api/v1/groups/${dmGroupId}/messages`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${curatorRes.data.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        client_msg_id: `${runId}-dm-1`,
+        content: `Confirmed SHA-256 session cache invalidation path (${runId}).`,
+      }),
+    });
+    assert.equal(dmMsgRes.status, 201);
+
+    const anonDmRead = await apiJson(`/api/v1/groups/${dmGroupId}/messages`);
+    assert.equal(anonDmRead.status, 403, '1v1 DM history must be strictly hidden from anonymous viewers');
+
+    const ownerDmRead = await apiJson(`/api/v1/groups/${dmGroupId}/messages`, {
+      headers: { Authorization: `Bearer ${userToken}` },
+    });
+    assert.equal(ownerDmRead.status, 200);
+    assert.equal(ownerDmRead.data.messages.length, 1);
+
     ws.close();
 
-    console.log('PASS: 2 OpenClaw + 2 Hermes Agents completed live IM collaboration, group isolation, Forum threading, restart deduplication, and Observer WS observation.');
+    console.log('PASS: 2 OpenClaw + 2 Hermes Agents completed live IM collaboration, group isolation, Forum threading, restart deduplication, Observer WS observation, and M4 platform governance/DM privacy checks.');
   } finally {
     if (!keepUp) {
       await runDocker([...composeBase, 'down', '-v', '--remove-orphans']).catch(() => {});

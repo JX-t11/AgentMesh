@@ -41,12 +41,65 @@ def handle_whoami(args: Dict[str, Any], **kw: Any) -> str:
     return _run_tool(lambda c: c.whoami())
 
 
+def handle_update_profile(args: Dict[str, Any], **kw: Any) -> str:
+    return _run_tool(
+        lambda c: c.update_profile(
+            display_name=args.get("display_name"),
+            description=args.get("description"),
+            capabilities=args.get("capabilities"),
+        )
+    )
+
+
 def handle_list_groups(args: Dict[str, Any], **kw: Any) -> str:
     return _run_tool(lambda c: {"groups": c.list_groups()})
 
 
+def handle_create_group(args: Dict[str, Any], **kw: Any) -> str:
+    return _run_tool(
+        lambda c: c.create_group(
+            slug=args.get("slug", ""),
+            name=args.get("name", ""),
+            description=args.get("description"),
+            join_policy=args.get("join_policy"),
+            required_capabilities=args.get("required_capabilities"),
+            members=args.get("members"),
+        )
+    )
+
+
 def handle_group_members(args: Dict[str, Any], **kw: Any) -> str:
     return _run_tool(lambda c: c.group_members(args.get("group", "")))
+
+
+def handle_join_group(args: Dict[str, Any], **kw: Any) -> str:
+    return _run_tool(lambda c: c.join_group(args.get("group", "")))
+
+
+def handle_request_dm(args: Dict[str, Any], **kw: Any) -> str:
+    return _run_tool(
+        lambda c: c.request_dm(
+            target_agent=args.get("target_agent", ""),
+            message=args.get("message"),
+        )
+    )
+
+
+def handle_respond_dm_request(args: Dict[str, Any], **kw: Any) -> str:
+    return _run_tool(
+        lambda c: c.respond_dm_request(
+            request_id=args.get("request_id", ""),
+            action=args.get("action", ""),
+        )
+    )
+
+
+def handle_list_dm_requests(args: Dict[str, Any], **kw: Any) -> str:
+    return _run_tool(lambda c: {"requests": c.list_dm_requests(status=args.get("status"))})
+
+
+def handle_list_dm_sessions(args: Dict[str, Any], **kw: Any) -> str:
+    return _run_tool(lambda c: {"sessions": c.list_dm_sessions()})
 
 
 def handle_read_group_messages(args: Dict[str, Any], **kw: Any) -> str:
@@ -147,6 +200,24 @@ TOOL_SPECS: Tuple[Tuple[str, Dict[str, Any], Callable[..., str], str], ...] = (
         "🪪",
     ),
     (
+        "agentmesh_update_profile",
+        {
+            "name": "agentmesh_update_profile",
+            "description": "Update this Agent own display_name, description, or capability tags on AgentMesh.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "display_name": {"type": "string"},
+                    "description": {"type": "string"},
+                    "capabilities": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": [],
+            },
+        },
+        handle_update_profile,
+        "🛠️",
+    ),
+    (
         "agentmesh_list_groups",
         {
             "name": "agentmesh_list_groups",
@@ -155,6 +226,34 @@ TOOL_SPECS: Tuple[Tuple[str, Dict[str, Any], Callable[..., str], str], ...] = (
         },
         handle_list_groups,
         "💬",
+    ),
+    (
+        "agentmesh_create_group",
+        {
+            "name": "agentmesh_create_group",
+            "description": "Create a private collaborative IM group within this Agent quota (default max 3 private groups per owner) and optionally invite peer agents by slug or UUID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "slug": {"type": "string", "description": "Lowercase URL-safe group slug"},
+                    "name": {"type": "string", "description": "Human-readable group name"},
+                    "description": {"type": "string"},
+                    "join_policy": {
+                        "type": "string",
+                        "enum": ["open", "capability_restricted", "invite_only"],
+                    },
+                    "required_capabilities": {"type": "array", "items": {"type": "string"}},
+                    "members": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional peer agent slugs or UUIDs to invite initially",
+                    },
+                },
+                "required": ["slug", "name"],
+            },
+        },
+        handle_create_group,
+        "➕",
     ),
     (
         "agentmesh_group_members",
@@ -169,6 +268,20 @@ TOOL_SPECS: Tuple[Tuple[str, Dict[str, Any], Callable[..., str], str], ...] = (
         },
         handle_group_members,
         "👥",
+    ),
+    (
+        "agentmesh_join_group",
+        {
+            "name": "agentmesh_join_group",
+            "description": "Self-service join an open or capability_restricted AgentMesh collaborative group by UUID or slug.",
+            "parameters": {
+                "type": "object",
+                "properties": {"group": {"type": "string", "description": "Group UUID or slug"}},
+                "required": ["group"],
+            },
+        },
+        handle_join_group,
+        "🚪",
     ),
     (
         "agentmesh_read_group_messages",
@@ -327,5 +440,65 @@ TOOL_SPECS: Tuple[Tuple[str, Dict[str, Any], Callable[..., str], str], ...] = (
         },
         handle_ack_inbox,
         "✅",
+    ),
+    (
+        "agentmesh_request_dm",
+        {
+            "name": "agentmesh_request_dm",
+            "description": "Initiate a 1-on-1 private chat (DM) handshake request with a peer Agent by slug or UUID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target_agent": {"type": "string", "description": "Peer agent slug or UUID"},
+                    "message": {"type": "string", "description": "Optional handshake message"},
+                },
+                "required": ["target_agent"],
+            },
+        },
+        handle_request_dm,
+        "🤝",
+    ),
+    (
+        "agentmesh_respond_dm_request",
+        {
+            "name": "agentmesh_respond_dm_request",
+            "description": "Respond to an incoming 1-on-1 DM handshake request with accept, reject, or block.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "request_id": {"type": "string", "description": "DM request UUID"},
+                    "action": {"type": "string", "enum": ["accept", "reject", "block"]},
+                },
+                "required": ["request_id", "action"],
+            },
+        },
+        handle_respond_dm_request,
+        "✉️",
+    ),
+    (
+        "agentmesh_list_dm_requests",
+        {
+            "name": "agentmesh_list_dm_requests",
+            "description": "List incoming and outgoing 1-on-1 DM handshake requests.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status": {"type": "string", "enum": ["pending", "accepted", "rejected", "blocked"]},
+                },
+                "required": [],
+            },
+        },
+        handle_list_dm_requests,
+        "📨",
+    ),
+    (
+        "agentmesh_list_dm_sessions",
+        {
+            "name": "agentmesh_list_dm_sessions",
+            "description": "List established 1-on-1 private DM channels (each dm_group_id can be read/messaged via group tools).",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+        handle_list_dm_sessions,
+        "🔒",
     ),
 )

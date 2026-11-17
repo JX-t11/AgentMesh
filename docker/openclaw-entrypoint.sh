@@ -71,6 +71,7 @@ const cfg = {
       "agentmesh_whoami",
       "agentmesh_list_groups",
       "agentmesh_group_members",
+      "agentmesh_join_group",
       "agentmesh_read_group_messages",
       "agentmesh_send_group_message",
       "agentmesh_list_forum_boards",
@@ -80,6 +81,10 @@ const cfg = {
       "agentmesh_create_forum_comment",
       "agentmesh_poll_inbox",
       "agentmesh_ack_inbox",
+      "agentmesh_request_dm",
+      "agentmesh_respond_dm_request",
+      "agentmesh_list_dm_requests",
+      "agentmesh_list_dm_sessions",
     ],
   },
   plugins: {

@@ -33,7 +33,8 @@ rm -rf "${HERMES_HOME}/plugins/agentmesh" "${HERMES_HOME}/skills/agentmesh"
 cp -R /opt/agentmesh-plugin "${HERMES_HOME}/plugins/agentmesh"
 cp -R /opt/agentmesh-plugin/skills/agentmesh "${HERMES_HOME}/skills/agentmesh"
 
-# /anthropic endpoints with provider="custom" preserve model slugs verbatim while routing via anthropic_messages.
+# A named custom provider binds its credentials explicitly; Hermes does not use
+# OPENAI_API_KEY for unrelated hosts such as the Zhipu endpoint.
 if [ "$LLM_API" = "anthropic-messages" ]; then
   if [[ "$LLM_BASE_URL" == */anthropic ]]; then
     HERMES_PROVIDER="custom"
@@ -49,18 +50,34 @@ else
   export OPENAI_BASE_URL="$LLM_BASE_URL"
 fi
 
-cat > "${HERMES_HOME}/config.yaml" <<EOF
-plugins:
-  enabled:
-    - agentmesh
-tools:
-  tool_search: false
-model:
-  default: "${LLM_MODEL}"
-  provider: "${HERMES_PROVIDER}"
-  base_url: "${LLM_BASE_URL}"
-  context_length: ${LLM_CONTEXT_WINDOW}
-EOF
+export HERMES_PROVIDER LLM_API LLM_BASE_URL LLM_MODEL LLM_CONTEXT_WINDOW
+/opt/hermes/.venv/bin/python3 - "${HERMES_HOME}/config.yaml" <<'PY'
+import json
+import os
+import sys
+
+provider = os.environ["HERMES_PROVIDER"]
+config = {
+    "plugins": {"enabled": ["agentmesh"]},
+    "tools": {"tool_search": False},
+    "model": {
+        "default": os.environ["LLM_MODEL"],
+        "provider": "custom:agentmesh" if provider == "custom" else provider,
+        "base_url": os.environ["LLM_BASE_URL"],
+        "context_length": int(os.environ["LLM_CONTEXT_WINDOW"]),
+    },
+}
+if provider == "custom":
+    config["custom_providers"] = [{
+        "name": "agentmesh",
+        "base_url": os.environ["LLM_BASE_URL"],
+        "model": os.environ["LLM_MODEL"],
+        "key_env": "LLM_API_KEY",
+        "api_mode": "anthropic_messages" if os.environ["LLM_API"] == "anthropic-messages" else "chat_completions",
+    }]
+with open(sys.argv[1], "w") as handle:
+    json.dump(config, handle, indent=2)
+PY
 chmod 0600 "${HERMES_HOME}/config.yaml"
 chown -R hermes:hermes "${HERMES_HOME}"
 

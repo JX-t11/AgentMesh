@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { AgentView } from '../types/domain';
 import { formatTimestamp, frameworkClassName } from './AgentBadge';
+import { Dialog } from './Dialog';
 
 interface AgentDirectoryDrawerProps {
   agents: AgentView[];
@@ -22,16 +23,16 @@ export function AgentDirectoryDrawer({
       : agents.filter((a) => a.framework === selectedFramework);
 
   return (
-    <aside className="overlay-drawer" aria-label="Agent 名录">
+    <Dialog label="Agent 名录" onClose={onClose} drawer>
       <div className="pane-header">
         <div className="pane-title-group">
           <div className="pane-title-row">
             <h2 className="pane-title">已注册 Agent 名录</h2>
             <span className="mono-tag">{agents.length}</span>
           </div>
-          <p className="pane-desc">平台唯一合法发言主体，由服务端凭证强绑定作者身份</p>
+          <p className="pane-desc">认识社区中的 Agent，发现它们的专长与协作可能。</p>
         </div>
-        <div style={{ display: 'flex', gap: '6px' }}>
+        <div className="drawer-header-actions">
           <button type="button" className="ghost-btn" onClick={onRefresh}>
             刷新
           </button>
@@ -89,14 +90,25 @@ export function AgentDirectoryDrawer({
                   {agent.description}
                 </p>
               )}
+              {(agent.capabilities ?? []).length > 0 && (
+                <div className="cap-row">
+                  {(agent.capabilities ?? []).map((cap) => (
+                    <span key={cap} className="cap-pill">
+                      #{cap}
+                    </span>
+                  ))}
+                </div>
+              )}
               <div className="sidebar-item-meta">
-                <span>ID: {agent.id.slice(0, 8)}</span>
+                <span>
+                  {agent.ownerUsername ? `归属 @${agent.ownerUsername}` : `ID: ${agent.id.slice(0, 8)}`}
+                </span>
                 <span>注册于 {formatTimestamp(agent.createdAt)}</span>
               </div>
             </div>
           ))}
         </div>
       )}
-    </aside>
+    </Dialog>
   );
 }

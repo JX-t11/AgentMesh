@@ -17,11 +17,14 @@ afterEach(() => {
 });
 
 describe('openclaw-agentmesh plugin & client', () => {
-  it('registers all 12 contract tools and resolves slugs to UUIDs at boundary', async () => {
+  it('registers all 19 contract tools and resolves slugs to UUIDs across IM, DM, and Forum', async () => {
     const selfId = '11111111-1111-4111-8111-111111111111';
     const peerId = '22222222-2222-4222-8222-222222222222';
     const groupId = '33333333-3333-4333-8333-333333333333';
+    const privGroupId = '99999999-9999-4999-8999-999999999999';
     const boardId = '44444444-4444-4444-8444-444444444444';
+    const dmReqId = '77777777-7777-4777-8777-777777777777';
+    const dmGroupId = '88888888-8888-4888-8888-888888888888';
     const capturedPosts: Array<{ url: string; body: unknown }> = [];
 
     const server = createServer((req, res) => {
@@ -31,6 +34,25 @@ describe('openclaw-agentmesh plugin & client', () => {
       });
       req.on('end', () => {
         res.setHeader('Content-Type', 'application/json');
+        if (req.url === '/api/v1/agents/me' && req.method === 'PATCH') {
+          const body = JSON.parse(raw);
+          capturedPosts.push({ url: req.url, body });
+          res.end(
+            JSON.stringify({
+              agent: {
+                id: selfId,
+                slug: 'openclaw-alpha',
+                display_name: body.display_name ?? 'Alpha',
+                framework: 'openclaw',
+                description: body.description ?? '',
+                capabilities: body.capabilities ?? [],
+                owner_user_id: null,
+                created_at: '2026-11-16T00:00:00Z',
+              },
+            }),
+          );
+          return;
+        }
         if (req.url === '/api/v1/agents' && req.method === 'GET') {
           res.end(
             JSON.stringify({
@@ -48,6 +70,85 @@ describe('openclaw-agentmesh plugin & client', () => {
               groups: [
                 { id: groupId, slug: 'mesh-general', name: 'Mesh General', description: null, last_seq: 1, created_at: '2026-11-16T00:00:00Z' },
               ],
+            }),
+          );
+          return;
+        }
+        if (req.url === '/api/v1/groups' && req.method === 'POST') {
+          const body = JSON.parse(raw);
+          capturedPosts.push({ url: req.url, body });
+          res.statusCode = 201;
+          res.end(
+            JSON.stringify({
+              group: {
+                id: privGroupId,
+                slug: body.slug,
+                name: body.name,
+                description: body.description ?? '',
+                visibility: body.visibility,
+                join_policy: body.join_policy ?? 'open',
+                creator_agent_id: selfId,
+                last_seq: 0,
+                member_count: 2,
+                created_at: '2026-11-16T00:00:00Z',
+              },
+            }),
+          );
+          return;
+        }
+        if (req.url === `/api/v1/groups/${groupId}/join` && req.method === 'POST') {
+          capturedPosts.push({ url: req.url, body: null });
+          res.end(
+            JSON.stringify({
+              group: { id: groupId, slug: 'mesh-general', name: 'Mesh General', description: null, last_seq: 1, created_at: '2026-11-16T00:00:00Z' },
+            }),
+          );
+          return;
+        }
+        if (req.url === '/api/v1/dm/requests' && req.method === 'POST') {
+          const body = JSON.parse(raw);
+          capturedPosts.push({ url: req.url, body });
+          res.statusCode = 201;
+          res.end(
+            JSON.stringify({
+              request: {
+                id: dmReqId,
+                sender_agent_id: selfId,
+                sender_slug: 'openclaw-alpha',
+                sender_display_name: 'Alpha',
+                receiver_agent_id: body.target_agent_id,
+                receiver_slug: 'hermes-gamma',
+                receiver_display_name: 'Gamma',
+                status: 'pending',
+                request_message: body.message ?? '',
+                dm_group_id: null,
+                created_at: '2026-11-16T00:00:00Z',
+                updated_at: '2026-11-16T00:00:00Z',
+              },
+            }),
+          );
+          return;
+        }
+        if (req.url === `/api/v1/dm/requests/${dmReqId}/respond` && req.method === 'POST') {
+          const body = JSON.parse(raw);
+          capturedPosts.push({ url: req.url, body });
+          res.statusCode = 200;
+          res.end(
+            JSON.stringify({
+              request: {
+                id: dmReqId,
+                sender_agent_id: peerId,
+                sender_slug: 'hermes-gamma',
+                sender_display_name: 'Gamma',
+                receiver_agent_id: selfId,
+                receiver_slug: 'openclaw-alpha',
+                receiver_display_name: 'Alpha',
+                status: 'accepted',
+                request_message: 'sync',
+                dm_group_id: dmGroupId,
+                created_at: '2026-11-16T00:00:00Z',
+                updated_at: '2026-11-16T00:00:00Z',
+              },
             }),
           );
           return;
@@ -119,7 +220,7 @@ describe('openclaw-agentmesh plugin & client', () => {
         registerTool: (tool) => tools.set(tool.name, tool),
       });
 
-      expect([...tools.keys()]).toHaveLength(12);
+      expect([...tools.keys()]).toHaveLength(19);
 
       const sendRes = await tools.get('agentmesh_send_group_message')!.execute('t1', {
         group: 'mesh-general',
@@ -147,6 +248,56 @@ describe('openclaw-agentmesh plugin & client', () => {
         title: 'RFC 001',
         content: 'Discuss mesh protocol',
         mention_agent_ids: [peerId],
+      });
+
+      await tools.get('agentmesh_join_group')!.execute('t3', { group: 'mesh-general' });
+      expect(capturedPosts[2].url).toBe(`/api/v1/groups/${groupId}/join`);
+
+      const dmReq = await tools.get('agentmesh_request_dm')!.execute('t4', {
+        target_agent: '@hermes-gamma',
+        message: '1-on-1 sync',
+      });
+      expect(dmReq.details.already_existed).toBe(false);
+      expect(capturedPosts[3].body).toEqual({
+        target_agent_id: peerId,
+        message: '1-on-1 sync',
+      });
+
+      const dmAccept = await tools.get('agentmesh_respond_dm_request')!.execute('t5', {
+        request_id: dmReqId,
+        action: 'accept',
+      });
+      expect((dmAccept.details.request as any).dm_group_id).toBe(dmGroupId);
+
+      const profileRes = await tools.get('agentmesh_update_profile')!.execute('t6', {
+        display_name: 'Alpha Autonomous',
+        capabilities: ['rust', 'planning'],
+      });
+      expect((profileRes.details.agent as any).display_name).toBe('Alpha Autonomous');
+      expect(capturedPosts[5]).toEqual({
+        url: '/api/v1/agents/me',
+        body: {
+          display_name: 'Alpha Autonomous',
+          capabilities: ['rust', 'planning'],
+        },
+      });
+
+      const privGroupRes = await tools.get('agentmesh_create_group')!.execute('t7', {
+        slug: 'alpha-taskforce',
+        name: 'Alpha Taskforce',
+        join_policy: 'invite_only',
+        members: ['@hermes-gamma'],
+      });
+      expect((privGroupRes.details.group as any).id).toBe(privGroupId);
+      expect(capturedPosts[6]).toEqual({
+        url: '/api/v1/groups',
+        body: {
+          slug: 'alpha-taskforce',
+          name: 'Alpha Taskforce',
+          visibility: 'private',
+          join_policy: 'invite_only',
+          member_agent_ids: [peerId],
+        },
       });
     } finally {
       server.close();

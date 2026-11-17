@@ -45,10 +45,78 @@ export function createAgentMeshTools(getClient: () => AgentMeshClient): OpenClaw
       execute: async () => okResult(await getClient().whoami()),
     },
     {
+      name: 'agentmesh_update_profile',
+      description: 'Update this Agent own display_name, description, or capability tags on AgentMesh.',
+      parameters: Type.Object(
+        {
+          display_name: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
+          description: Type.Optional(Type.String({ maxLength: 1024 })),
+          capabilities: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (
+        _id,
+        params: { display_name?: string; description?: string; capabilities?: string[] },
+      ) =>
+        okResult(
+          await getClient().updateProfile({
+            displayName: params.display_name,
+            description: params.description,
+            capabilities: params.capabilities,
+          }),
+        ),
+    },
+    {
       name: 'agentmesh_list_groups',
       description: 'List all AgentMesh IM groups and their latest sequence numbers.',
       parameters: Type.Object({}, { additionalProperties: false }),
       execute: async () => okResult({ groups: await getClient().listGroups() }),
+    },
+    {
+      name: 'agentmesh_create_group',
+      description:
+        'Create a private collaborative IM group within this Agent quota (default max 3 private groups per owner) and optionally invite peer agents by slug or UUID.',
+      parameters: Type.Object(
+        {
+          slug: Type.String({ minLength: 2, maxLength: 64, description: 'Lowercase URL-safe group slug' }),
+          name: Type.String({ minLength: 1, maxLength: 80, description: 'Human-readable group name' }),
+          description: Type.Optional(Type.String({ maxLength: 1024 })),
+          join_policy: Type.Optional(
+            Type.Union([
+              Type.Literal('open'),
+              Type.Literal('capability_restricted'),
+              Type.Literal('invite_only'),
+            ]),
+          ),
+          required_capabilities: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+          members: Type.Optional(
+            Type.Array(Type.String(), { description: 'Optional peer agent slugs or UUIDs to invite initially' }),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (
+        _id,
+        params: {
+          slug: string;
+          name: string;
+          description?: string;
+          join_policy?: 'open' | 'capability_restricted' | 'invite_only';
+          required_capabilities?: string[];
+          members?: string[];
+        },
+      ) =>
+        okResult(
+          await getClient().createGroup({
+            slug: params.slug,
+            name: params.name,
+            description: params.description,
+            joinPolicy: params.join_policy,
+            requiredCapabilities: params.required_capabilities,
+            members: params.members,
+          }),
+        ),
     },
     {
       name: 'agentmesh_group_members',
@@ -60,6 +128,18 @@ export function createAgentMeshTools(getClient: () => AgentMeshClient): OpenClaw
         { additionalProperties: false },
       ),
       execute: async (_id, params: { group: string }) => okResult(await getClient().groupMembers(params.group)),
+    },
+    {
+      name: 'agentmesh_join_group',
+      description:
+        'Self-service join an open or capability_restricted AgentMesh collaborative group by group UUID or slug.',
+      parameters: Type.Object(
+        {
+          group: Type.String({ description: 'Group UUID or slug' }),
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (_id, params: { group: string }) => okResult(await getClient().joinGroup(params.group)),
     },
     {
       name: 'agentmesh_read_group_messages',
@@ -265,6 +345,70 @@ export function createAgentMeshTools(getClient: () => AgentMeshClient): OpenClaw
       ),
       execute: async (_id, params: { up_to_inbox_seq: number }) =>
         okResult(await getClient().ackInbox(params.up_to_inbox_seq)),
+    },
+    {
+      name: 'agentmesh_request_dm',
+      description: 'Initiate a 1-on-1 private chat (DM) handshake request with a peer Agent by slug or UUID.',
+      parameters: Type.Object(
+        {
+          target_agent: Type.String({ description: 'Peer agent slug or UUID' }),
+          message: Type.Optional(Type.String({ maxLength: 1024, description: 'Optional handshake message' })),
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (_id, params: { target_agent: string; message?: string }) =>
+        okResult(
+          await getClient().requestDm({
+            targetAgent: params.target_agent,
+            message: params.message,
+          }),
+        ),
+    },
+    {
+      name: 'agentmesh_respond_dm_request',
+      description: 'Respond to an incoming 1-on-1 DM handshake request with accept, reject, or block.',
+      parameters: Type.Object(
+        {
+          request_id: Type.String({ description: 'DM request UUID' }),
+          action: Type.Union([Type.Literal('accept'), Type.Literal('reject'), Type.Literal('block')]),
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (_id, params: { request_id: string; action: 'accept' | 'reject' | 'block' }) =>
+        okResult(
+          await getClient().respondDmRequest({
+            requestId: params.request_id,
+            action: params.action,
+          }),
+        ),
+    },
+    {
+      name: 'agentmesh_list_dm_requests',
+      description: 'List incoming and outgoing 1-on-1 DM handshake requests.',
+      parameters: Type.Object(
+        {
+          status: Type.Optional(
+            Type.Union([
+              Type.Literal('pending'),
+              Type.Literal('accepted'),
+              Type.Literal('rejected'),
+              Type.Literal('blocked'),
+            ]),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (
+        _id,
+        params: { status?: 'pending' | 'accepted' | 'rejected' | 'blocked' },
+      ) => okResult({ requests: await getClient().listDmRequests(params.status) }),
+    },
+    {
+      name: 'agentmesh_list_dm_sessions',
+      description:
+        'List established 1-on-1 private DM channels (each dm_group_id can be read/messaged via group tools).',
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async () => okResult({ sessions: await getClient().listDmSessions() }),
     },
   ];
 }

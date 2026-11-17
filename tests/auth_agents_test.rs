@@ -44,12 +44,11 @@ async fn agent_registration_auth_warmup_revocation_and_anonymous_read() {
         .await;
     assert!(token.starts_with("amesh_"));
 
-    let stored_hash: Vec<u8> =
-        sqlx::query_scalar("SELECT token_sha256 FROM agents WHERE id = $1")
-            .bind(agent_id)
-            .fetch_one(&app.db)
-            .await
-            .unwrap();
+    let stored_hash: Vec<u8> = sqlx::query_scalar("SELECT token_sha256 FROM agents WHERE id = $1")
+        .bind(agent_id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
     assert_eq!(stored_hash.as_slice(), hash_token(&token).as_slice());
 
     // 4. 普通 Agent Token 不能调用管理接口，重复 slug 返回 409
@@ -160,6 +159,225 @@ async fn agent_registration_auth_warmup_revocation_and_anonymous_read() {
     let parsed_list: Value = serde_json::from_str(&raw_list).unwrap();
     assert_eq!(parsed_list["agents"][0]["slug"], "openclaw-alpha");
     assert_eq!(parsed_list["agents"][0]["is_revoked"], true);
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn autonomous_agent_self_registration_self_governance_and_user_claim() {
+    let app = TestApp::spawn().await;
+
+    // 1. 免人类账号、免鉴权直接注册独立 Agent
+    let reg_resp = app
+        .client
+        .post(format!("{}/api/v1/agents/register", app.base_url))
+        .json(&json!({
+            "slug": "solo-scout",
+            "display_name": "Solo Scout",
+            "framework": "openclaw",
+            "description": "Autonomous crawler",
+            "capabilities": ["search", "triage"]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(reg_resp.status(), 201);
+    let reg_body: Value = reg_resp.json().await.unwrap();
+    let agent_id = reg_body["agent"]["id"].as_str().unwrap().to_owned();
+    let token_v1 = reg_body["token"].as_str().unwrap().to_owned();
+    assert!(token_v1.starts_with("amesh_"));
+    assert!(reg_body["agent"]["owner_user_id"].is_null());
+    assert!(reg_body["agent"]["owner_username"].is_null());
+
+    // 重复 slug 返回 409
+    let dup_resp = app
+        .client
+        .post(format!("{}/api/v1/agents/register", app.base_url))
+        .json(&json!({
+            "slug": "solo-scout",
+            "display_name": "Solo Scout 2",
+            "framework": "hermes"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(dup_resp.status(), 409);
+
+    // 2. Agent 凭自身 amesh_ token 更新自身档案与能力标签，内存缓存同步刷新
+    let patch_resp = app
+        .client
+        .patch(format!("{}/api/v1/agents/me", app.base_url))
+        .bearer_auth(&token_v1)
+        .json(&json!({
+            "display_name": "Solo Scout v2",
+            "description": "Autonomous research agent",
+            "capabilities": ["search", "sql", "rust"]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(patch_resp.status(), 200);
+    let patch_body: Value = patch_resp.json().await.unwrap();
+    assert_eq!(patch_body["agent"]["display_name"], "Solo Scout v2");
+    assert_eq!(
+        patch_body["agent"]["capabilities"],
+        json!(["rust", "search", "sql"])
+    );
+    assert_eq!(
+        app.state
+            .auth_cache
+            .verify_token(&token_v1)
+            .unwrap()
+            .display_name,
+        "Solo Scout v2"
+    );
+
+    // 3. Agent 自助轮换自身 Token，旧 Token 立即失效
+    let rotate_resp = app
+        .client
+        .post(format!("{}/api/v1/agents/me/rotate-token", app.base_url))
+        .bearer_auth(&token_v1)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rotate_resp.status(), 200);
+    let rotate_body: Value = rotate_resp.json().await.unwrap();
+    let token_v2 = rotate_body["token"].as_str().unwrap().to_owned();
+    assert_ne!(token_v2, token_v1);
+
+    let old_me = app
+        .client
+        .get(format!("{}/api/v1/agents/me", app.base_url))
+        .bearer_auth(&token_v1)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(old_me.status(), 401);
+
+    let new_me = app
+        .client
+        .get(format!("{}/api/v1/agents/me", app.base_url))
+        .bearer_auth(&token_v2)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(new_me.status(), 200);
+
+    // 4. 人类用户凭有效 amesh_ token 认领独立 Agent，其它用户再次认领返回 409
+    let alice_reg: Value = app
+        .client
+        .post(format!("{}/api/v1/auth/register", app.base_url))
+        .json(&json!({
+            "username": "alice",
+            "display_name": "Alice",
+            "password": "password123"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let alice_id = alice_reg["user"]["id"].as_str().unwrap().to_owned();
+    let alice_token = alice_reg["token"].as_str().unwrap().to_owned();
+
+    let bob_reg: Value = app
+        .client
+        .post(format!("{}/api/v1/auth/register", app.base_url))
+        .json(&json!({
+            "username": "bob",
+            "display_name": "Bob",
+            "password": "password123"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let bob_token = bob_reg["token"].as_str().unwrap().to_owned();
+
+    // 旧失效 token 无法认领
+    let bad_claim = app
+        .client
+        .post(format!("{}/api/v1/me/agents/claim", app.base_url))
+        .bearer_auth(&alice_token)
+        .json(&json!({ "agent_token": token_v1 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad_claim.status(), 401);
+
+    // Alice 认领成功
+    let claim_ok = app
+        .client
+        .post(format!("{}/api/v1/me/agents/claim", app.base_url))
+        .bearer_auth(&alice_token)
+        .json(&json!({ "agent_token": token_v2 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(claim_ok.status(), 200);
+    let claim_body: Value = claim_ok.json().await.unwrap();
+    assert_eq!(claim_body["agent"]["id"], agent_id);
+    assert_eq!(claim_body["agent"]["owner_user_id"], alice_id);
+    assert_eq!(claim_body["agent"]["owner_username"], "alice");
+
+    // 同一拥有者重复认领幂等返回 200
+    let claim_idempotent = app
+        .client
+        .post(format!("{}/api/v1/me/agents/claim", app.base_url))
+        .bearer_auth(&alice_token)
+        .json(&json!({ "agent_token": token_v2 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(claim_idempotent.status(), 200);
+
+    // Bob 企图认领已被 Alice 拥有的 Agent 返回 409
+    let claim_conflict = app
+        .client
+        .post(format!("{}/api/v1/me/agents/claim", app.base_url))
+        .bearer_auth(&bob_token)
+        .json(&json!({ "agent_token": token_v2 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(claim_conflict.status(), 409);
+
+    let alice_agents: Value = app
+        .client
+        .get(format!("{}/api/v1/me/agents", app.base_url))
+        .bearer_auth(&alice_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(alice_agents["agents"].as_array().unwrap().len(), 1);
+    assert_eq!(alice_agents["agents"][0]["id"], agent_id);
+
+    // 5. Agent 自助吊销自身凭证后立即返回 401
+    let revoke_me = app
+        .client
+        .post(format!("{}/api/v1/agents/me/revoke", app.base_url))
+        .bearer_auth(&token_v2)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(revoke_me.status(), 200);
+    let revoke_body: Value = revoke_me.json().await.unwrap();
+    assert_eq!(revoke_body["agent"]["is_revoked"], true);
+
+    let after_self_revoke = app
+        .client
+        .get(format!("{}/api/v1/agents/me", app.base_url))
+        .bearer_auth(&token_v2)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(after_self_revoke.status(), 401);
 
     app.cleanup().await;
 }

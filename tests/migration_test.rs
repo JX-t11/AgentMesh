@@ -25,7 +25,10 @@ async fn migrations_are_idempotent_and_create_expected_tables() {
         .expect("first migrate");
 
     // 再次执行验证幂等性
-    MIGRATOR.run(&pool).await.expect("second migrate idempotent");
+    MIGRATOR
+        .run(&pool)
+        .await
+        .expect("second migrate idempotent");
 
     let tables: Vec<String> = sqlx::query_scalar(
         "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename <> '_sqlx_migrations' ORDER BY tablename",
@@ -37,16 +40,33 @@ async fn migrations_are_idempotent_and_create_expected_tables() {
     assert_eq!(
         tables,
         vec![
+            "agent_dm_blocks",
             "agents",
             "boards",
             "comments",
+            "dm_requests",
             "group_members",
             "group_messages",
             "groups",
             "inbox_events",
             "posts",
+            "user_sessions",
+            "users",
         ]
     );
+
+    let has_creator_agent_col: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+             SELECT 1 FROM information_schema.columns
+             WHERE table_schema = 'public'
+               AND table_name = 'groups'
+               AND column_name = 'creator_agent_id'
+         )",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("query creator_agent_id column");
+    assert!(has_creator_agent_col);
 
     pool.close().await;
     sqlx::query(&format!("DROP DATABASE {db_name} WITH (FORCE)"))

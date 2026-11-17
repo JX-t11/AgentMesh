@@ -110,7 +110,9 @@ pub async fn ack_inbox(
     AppJson(req): AppJson<AckInboxRequest>,
 ) -> Result<Json<AckInboxResponse>, AppError> {
     if req.up_to_inbox_seq < 0 {
-        return Err(AppError::Unprocessable("up_to_inbox_seq must be >= 0".into()));
+        return Err(AppError::Unprocessable(
+            "up_to_inbox_seq must be >= 0".into(),
+        ));
     }
 
     let acked_inbox_seq: i64 = sqlx::query_scalar(

@@ -8,13 +8,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use sqlx::types::Json as SqlxJson;
-use sqlx::FromRow;
+use sqlx::{FromRow, Postgres, QueryBuilder};
 use uuid::Uuid;
 
-use crate::auth::{AdminAuth, AgentAuth};
+use crate::auth::{AdminAuth, AgentAuth, OptionalViewer};
 use crate::domain::types::{
-    ClientReqId, DescriptionText, MessageBody, PageLimit, PostTitle, ShortName, Slug,
-    UniqueAgentIds,
+    BoardVisibility, ClientReqId, DescriptionText, MessageBody, PageLimit, PostTitle, ShortName,
+    Slug, UniqueAgentIds,
 };
 use crate::error::{AppError, AppJson, AppQuery};
 use crate::events::{encode_event, AgentSignal};
@@ -28,6 +28,15 @@ pub struct CreateBoardRequest {
     pub name: ShortName,
     #[serde(default)]
     pub description: DescriptionText,
+    #[serde(default)]
+    pub visibility: BoardVisibility,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateBoardRequest {
+    pub name: Option<ShortName>,
+    pub description: Option<DescriptionText>,
+    pub visibility: Option<BoardVisibility>,
 }
 
 #[derive(Deserialize)]
@@ -78,6 +87,8 @@ pub struct BoardView {
     pub slug: String,
     pub name: String,
     pub description: String,
+    pub visibility: String,
+    pub creator_user_id: Option<Uuid>,
     pub post_count: i64,
     pub created_at: DateTime<Utc>,
 }
@@ -116,6 +127,7 @@ pub struct BoardEnvelope {
 #[derive(Serialize)]
 pub struct BoardListResponse {
     pub boards: Vec<BoardView>,
+    pub hidden_platform_count: i64,
 }
 
 #[derive(Serialize)]
@@ -125,7 +137,7 @@ pub struct PostEnvelope {
 
 #[derive(Serialize)]
 pub struct PostListResponse {
-    pub board_id: Uuid,
+    pub board_id: Option<Uuid>,
     pub posts: Vec<PostView>,
     pub next_cursor: Option<String>,
     pub has_more: bool,
@@ -156,6 +168,7 @@ struct CreatedInboxEntry {
 #[derive(FromRow)]
 struct CreatePostCteRow {
     board_exists: bool,
+    board_visibility: Option<String>,
     mentions_ok: bool,
     is_new: bool,
     existing_hash: Option<Vec<u8>>,
@@ -173,6 +186,7 @@ struct CreatePostCteRow {
 #[derive(FromRow)]
 struct CreateCommentCteRow {
     post_exists: bool,
+    board_visibility: Option<String>,
     parent_ok: bool,
     mentions_ok: bool,
     is_new: bool,
@@ -194,14 +208,16 @@ pub async fn create_board(
 ) -> Result<(StatusCode, Json<BoardEnvelope>), AppError> {
     let id = Uuid::new_v4();
     let board = sqlx::query_as::<_, BoardView>(
-        "INSERT INTO boards (id, slug, name, description)
-         VALUES ($1, $2, $3, $4)
-         RETURNING id, slug, name, description, 0::bigint AS post_count, created_at",
+        "INSERT INTO boards (id, slug, name, description, visibility, creator_user_id)
+         VALUES ($1, $2, $3, $4, $5, NULL)
+         RETURNING id, slug, name, description, visibility, creator_user_id,
+                   0::bigint AS post_count, created_at",
     )
     .bind(id)
     .bind(req.slug.as_str())
     .bind(req.name.as_str())
     .bind(req.description.as_str())
+    .bind(req.visibility.as_str())
     .fetch_one(&state.db)
     .await
     .map_err(map_board_slug_conflict)?;
@@ -209,26 +225,95 @@ pub async fn create_board(
     Ok((StatusCode::CREATED, Json(BoardEnvelope { board })))
 }
 
-pub async fn list_boards(State(state): State<AppState>) -> Result<Json<BoardListResponse>, AppError> {
+pub async fn update_board(
+    _admin: AdminAuth,
+    State(state): State<AppState>,
+    Path(board_id): Path<Uuid>,
+    AppJson(req): AppJson<UpdateBoardRequest>,
+) -> Result<Json<BoardEnvelope>, AppError> {
+    let name = req.name.as_ref().map(|v| v.as_str());
+    let description = req.description.as_ref().map(|v| v.as_str());
+    let visibility = req.visibility.map(|v| v.as_str());
+
+    let board = sqlx::query_as::<_, BoardView>(
+        "WITH updated AS (
+             UPDATE boards
+             SET name = COALESCE($2, name),
+                 description = COALESCE($3, description),
+                 visibility = COALESCE($4, visibility)
+             WHERE id = $1
+             RETURNING id, slug, name, description, visibility, creator_user_id, created_at
+         )
+         SELECT up.id, up.slug, up.name, up.description, up.visibility, up.creator_user_id,
+                COUNT(p.id) AS post_count, up.created_at
+         FROM updated up
+         LEFT JOIN posts p ON p.board_id = up.id
+         GROUP BY up.id, up.slug, up.name, up.description, up.visibility, up.creator_user_id, up.created_at",
+    )
+    .bind(board_id)
+    .bind(name)
+    .bind(description)
+    .bind(visibility)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("board not found".into()))?;
+
+    Ok(Json(BoardEnvelope { board }))
+}
+
+pub async fn list_boards(
+    viewer: OptionalViewer,
+    State(state): State<AppState>,
+) -> Result<Json<BoardListResponse>, AppError> {
+    if viewer.is_platform_authenticated() {
+        let boards = sqlx::query_as::<_, BoardView>(
+            "SELECT b.id, b.slug, b.name, b.description, b.visibility, b.creator_user_id,
+                    COUNT(p.id) AS post_count, b.created_at
+             FROM boards b
+             LEFT JOIN posts p ON p.board_id = b.id
+             GROUP BY b.id
+             ORDER BY b.created_at ASC, b.id ASC",
+        )
+        .fetch_all(&state.db)
+        .await?;
+
+        return Ok(Json(BoardListResponse {
+            boards,
+            hidden_platform_count: 0,
+        }));
+    }
+
     let boards = sqlx::query_as::<_, BoardView>(
-        "SELECT b.id, b.slug, b.name, b.description, COUNT(p.id) AS post_count, b.created_at
+        "SELECT b.id, b.slug, b.name, b.description, b.visibility, b.creator_user_id,
+                COUNT(p.id) AS post_count, b.created_at
          FROM boards b
          LEFT JOIN posts p ON p.board_id = b.id
+         WHERE b.visibility = 'public'
          GROUP BY b.id
          ORDER BY b.created_at ASC, b.id ASC",
     )
     .fetch_all(&state.db)
     .await?;
 
-    Ok(Json(BoardListResponse { boards }))
+    let hidden_platform_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM boards WHERE visibility = 'platform'")
+            .fetch_one(&state.db)
+            .await?;
+
+    Ok(Json(BoardListResponse {
+        boards,
+        hidden_platform_count,
+    }))
 }
 
 pub async fn get_board(
+    viewer: OptionalViewer,
     State(state): State<AppState>,
     Path(board_id): Path<Uuid>,
 ) -> Result<Json<BoardEnvelope>, AppError> {
     let board = sqlx::query_as::<_, BoardView>(
-        "SELECT b.id, b.slug, b.name, b.description, COUNT(p.id) AS post_count, b.created_at
+        "SELECT b.id, b.slug, b.name, b.description, b.visibility, b.creator_user_id,
+                COUNT(p.id) AS post_count, b.created_at
          FROM boards b
          LEFT JOIN posts p ON p.board_id = b.id
          WHERE b.id = $1
@@ -238,6 +323,12 @@ pub async fn get_board(
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::NotFound("board not found".into()))?;
+
+    if board.visibility == "platform" && !viewer.is_platform_authenticated() {
+        return Err(AppError::Forbidden(
+            "platform authentication required to view this board".into(),
+        ));
+    }
 
     Ok(Json(BoardEnvelope { board }))
 }
@@ -249,7 +340,8 @@ pub async fn create_post(
     AppJson(req): AppJson<CreatePostRequest>,
 ) -> Result<(StatusCode, Json<PostEnvelope>), AppError> {
     let mentions = req.mention_agent_ids.as_slice();
-    let payload_hash = compute_post_hash(board_id, req.title.as_str(), req.content.as_str(), mentions);
+    let payload_hash =
+        compute_post_hash(board_id, req.title.as_str(), req.content.as_str(), mentions);
     let inbox_recipients: Vec<Uuid> = mentions
         .iter()
         .copied()
@@ -313,6 +405,7 @@ pub async fn create_post(
         ));
     }
 
+    let is_public_board = row.board_visibility.as_deref() == Some("public");
     let inbox_entries = std::mem::take(&mut row.inbox_entries.0);
     let post = extract_post_from_cte_row(principal.id, req.client_req_id.as_str(), row)?;
 
@@ -320,7 +413,9 @@ pub async fn create_post(
         "type": "post_created",
         "post": &post,
     }));
-    state.events.publish_forum(forum_frame);
+    state
+        .events
+        .publish_forum_scoped(forum_frame, is_public_board);
 
     for entry in inbox_entries {
         let inbox_view = InboxEventView {
@@ -346,11 +441,79 @@ pub async fn create_post(
     Ok((StatusCode::CREATED, Json(PostEnvelope { post })))
 }
 
+pub async fn list_posts(
+    viewer: OptionalViewer,
+    State(state): State<AppState>,
+    AppQuery(query): AppQuery<ListBoardPostsQuery>,
+) -> Result<Json<PostListResponse>, AppError> {
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(decode_keyset_cursor)
+        .transpose()?;
+    let sort_column = match query.sort {
+        PostSortOrder::Active => "p.last_activity_at",
+        PostSortOrder::Newest => "p.created_at",
+    };
+    let mut statement = QueryBuilder::<Postgres>::new(
+        "SELECT p.id, p.board_id, p.author_agent_id, p.client_req_id, p.title, p.content,
+                p.mention_agent_ids, p.comment_count, p.last_activity_at, p.created_at
+         FROM posts p JOIN boards b ON b.id = p.board_id
+         WHERE (b.visibility = 'public' OR ",
+    );
+    statement
+        .push_bind(viewer.is_platform_authenticated())
+        .push(")");
+    if let Some((timestamp, id)) = cursor {
+        statement
+            .push(" AND (")
+            .push(sort_column)
+            .push(", p.id) < (")
+            .push_bind(timestamp)
+            .push(", ")
+            .push_bind(id)
+            .push(")");
+    }
+    statement
+        .push(" ORDER BY ")
+        .push(sort_column)
+        .push(" DESC, p.id DESC LIMIT ")
+        .push_bind(query.limit.get() + 1);
+    let mut posts = statement
+        .build_query_as::<PostView>()
+        .fetch_all(&state.db)
+        .await?;
+    let has_more = posts.len() as i64 > query.limit.get();
+    if has_more {
+        posts.pop();
+    }
+    let next_cursor = if has_more {
+        posts.last().map(|post| {
+            let timestamp = match query.sort {
+                PostSortOrder::Active => post.last_activity_at,
+                PostSortOrder::Newest => post.created_at,
+            };
+            encode_keyset_cursor(timestamp, post.id)
+        })
+    } else {
+        None
+    };
+    Ok(Json(PostListResponse {
+        board_id: None,
+        posts,
+        next_cursor,
+        has_more,
+    }))
+}
+
 pub async fn list_board_posts(
+    viewer: OptionalViewer,
     State(state): State<AppState>,
     Path(board_id): Path<Uuid>,
     AppQuery(query): AppQuery<ListBoardPostsQuery>,
 ) -> Result<Json<PostListResponse>, AppError> {
+    ensure_board_visible(&state, board_id, &viewer).await?;
+
     let decoded_cursor = match query.cursor.as_deref() {
         Some(raw) => Some(decode_keyset_cursor(raw)?),
         None => None,
@@ -422,16 +585,6 @@ pub async fn list_board_posts(
         }
     };
 
-    if posts.is_empty() && decoded_cursor.is_none() {
-        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM boards WHERE id = $1)")
-            .bind(board_id)
-            .fetch_one(&state.db)
-            .await?;
-        if !exists {
-            return Err(AppError::NotFound("board not found".into()));
-        }
-    }
-
     let has_more = posts.len() as i64 > query.limit.get();
     if has_more {
         posts.pop();
@@ -450,7 +603,7 @@ pub async fn list_board_posts(
     };
 
     Ok(Json(PostListResponse {
-        board_id,
+        board_id: Some(board_id),
         posts,
         next_cursor,
         has_more,
@@ -458,21 +611,37 @@ pub async fn list_board_posts(
 }
 
 pub async fn get_post(
+    viewer: OptionalViewer,
     State(state): State<AppState>,
     Path(post_id): Path<Uuid>,
 ) -> Result<Json<PostEnvelope>, AppError> {
-    let post = sqlx::query_as::<_, PostView>(
-        "SELECT id, board_id, author_agent_id, client_req_id, title, content,
-                mention_agent_ids, comment_count, last_activity_at, created_at
-         FROM posts
-         WHERE id = $1",
+    #[derive(FromRow)]
+    struct PostWithVisibility {
+        #[sqlx(flatten)]
+        post: PostView,
+        board_visibility: String,
+    }
+
+    let row = sqlx::query_as::<_, PostWithVisibility>(
+        "SELECT p.id, p.board_id, p.author_agent_id, p.client_req_id, p.title, p.content,
+                p.mention_agent_ids, p.comment_count, p.last_activity_at, p.created_at,
+                b.visibility AS board_visibility
+         FROM posts p
+         JOIN boards b ON b.id = p.board_id
+         WHERE p.id = $1",
     )
     .bind(post_id)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::NotFound("post not found".into()))?;
 
-    Ok(Json(PostEnvelope { post }))
+    if row.board_visibility == "platform" && !viewer.is_platform_authenticated() {
+        return Err(AppError::Forbidden(
+            "platform authentication required to view this post".into(),
+        ));
+    }
+
+    Ok(Json(PostEnvelope { post: row.post }))
 }
 
 pub async fn create_comment(
@@ -529,7 +698,8 @@ pub async fn create_comment(
                 ));
             }
             let post_comment_count = row.post_comment_count.unwrap_or(0);
-            let comment = extract_comment_from_cte_row(principal.id, req.client_req_id.as_str(), row)?;
+            let comment =
+                extract_comment_from_cte_row(principal.id, req.client_req_id.as_str(), row)?;
             return Ok((
                 StatusCode::OK,
                 Json(CommentEnvelope {
@@ -554,6 +724,7 @@ pub async fn create_comment(
         ));
     }
 
+    let is_public_board = row.board_visibility.as_deref() == Some("public");
     let inbox_entries = std::mem::take(&mut row.inbox_entries.0);
     let post_comment_count = row.post_comment_count.unwrap_or(1);
     let comment = extract_comment_from_cte_row(principal.id, req.client_req_id.as_str(), row)?;
@@ -563,7 +734,9 @@ pub async fn create_comment(
         "comment": &comment,
         "post_comment_count": post_comment_count,
     }));
-    state.events.publish_forum(forum_frame);
+    state
+        .events
+        .publish_forum_scoped(forum_frame, is_public_board);
 
     for entry in inbox_entries {
         let inbox_view = InboxEventView {
@@ -596,10 +769,13 @@ pub async fn create_comment(
 }
 
 pub async fn list_post_comments(
+    viewer: OptionalViewer,
     State(state): State<AppState>,
     Path(post_id): Path<Uuid>,
     AppQuery(query): AppQuery<ListPostCommentsQuery>,
 ) -> Result<Json<CommentListResponse>, AppError> {
+    ensure_post_visible(&state, post_id, &viewer).await?;
+
     let decoded_cursor = match query.cursor.as_deref() {
         Some(raw) => Some(decode_keyset_cursor(raw)?),
         None => None,
@@ -640,16 +816,6 @@ pub async fn list_post_comments(
         }
     };
 
-    if comments.is_empty() && decoded_cursor.is_none() {
-        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM posts WHERE id = $1)")
-            .bind(post_id)
-            .fetch_one(&state.db)
-            .await?;
-        if !exists {
-            return Err(AppError::NotFound("post not found".into()));
-        }
-    }
-
     let has_more = comments.len() as i64 > query.limit.get();
     if has_more {
         comments.pop();
@@ -687,7 +853,7 @@ async fn execute_create_post_cte(
 ) -> Result<CreatePostCteRow, sqlx::Error> {
     sqlx::query_as::<_, CreatePostCteRow>(
         "WITH brd AS (
-             SELECT id FROM boards WHERE id = $2
+             SELECT id, visibility FROM boards WHERE id = $2
          ),
          existing AS (
              SELECT id, board_id, payload_hash, title, content, mention_agent_ids,
@@ -744,6 +910,7 @@ async fn execute_create_post_cte(
          )
          SELECT
              EXISTS(SELECT 1 FROM brd) AS board_exists,
+             (SELECT visibility FROM brd) AS board_visibility,
              (SELECT ok FROM mentions_ok) AS mentions_ok,
              EXISTS(SELECT 1 FROM inserted_post) AS is_new,
              (SELECT payload_hash FROM existing) AS existing_hash,
@@ -794,7 +961,10 @@ async fn execute_create_comment_cte(
 ) -> Result<CreateCommentCteRow, sqlx::Error> {
     sqlx::query_as::<_, CreateCommentCteRow>(
         "WITH tgt_post AS (
-             SELECT id, author_agent_id, comment_count FROM posts WHERE id = $2
+             SELECT p.id, p.author_agent_id, p.comment_count, b.visibility AS board_visibility
+             FROM posts p
+             JOIN boards b ON b.id = p.board_id
+             WHERE p.id = $2
          ),
          existing AS (
              SELECT c.id, c.post_id, c.payload_hash, c.parent_comment_id,
@@ -888,6 +1058,7 @@ async fn execute_create_comment_cte(
          )
          SELECT
              EXISTS(SELECT 1 FROM tgt_post) AS post_exists,
+             (SELECT board_visibility FROM tgt_post) AS board_visibility,
              (SELECT ok FROM parent_ok) AS parent_ok,
              (SELECT ok FROM mentions_ok) AS mentions_ok,
              EXISTS(SELECT 1 FROM inserted_comment) AS is_new,
@@ -1111,8 +1282,8 @@ fn decode_keyset_cursor(encoded: &str) -> Result<(DateTime<Utc>, Uuid), AppError
         .map_err(|_| AppError::BadRequest("invalid cursor timestamp".into()))?;
     let dt = DateTime::from_timestamp_micros(micros)
         .ok_or_else(|| AppError::BadRequest("out-of-range cursor timestamp".into()))?;
-    let id = Uuid::parse_str(id_str)
-        .map_err(|_| AppError::BadRequest("invalid cursor uuid".into()))?;
+    let id =
+        Uuid::parse_str(id_str).map_err(|_| AppError::BadRequest("invalid cursor uuid".into()))?;
     Ok((dt, id))
 }
 
@@ -1161,4 +1332,48 @@ fn map_board_slug_conflict(err: sqlx::Error) -> AppError {
         }
     }
     AppError::from(err)
+}
+
+async fn ensure_board_visible(
+    state: &AppState,
+    board_id: Uuid,
+    viewer: &OptionalViewer,
+) -> Result<(), AppError> {
+    let visibility: Option<String> =
+        sqlx::query_scalar("SELECT visibility FROM boards WHERE id = $1")
+            .bind(board_id)
+            .fetch_optional(&state.db)
+            .await?;
+
+    let visibility = visibility.ok_or_else(|| AppError::NotFound("board not found".into()))?;
+    if visibility == "platform" && !viewer.is_platform_authenticated() {
+        return Err(AppError::Forbidden(
+            "platform authentication required to view this board".into(),
+        ));
+    }
+    Ok(())
+}
+
+async fn ensure_post_visible(
+    state: &AppState,
+    post_id: Uuid,
+    viewer: &OptionalViewer,
+) -> Result<(), AppError> {
+    let visibility: Option<String> = sqlx::query_scalar(
+        "SELECT b.visibility
+         FROM posts p
+         JOIN boards b ON b.id = p.board_id
+         WHERE p.id = $1",
+    )
+    .bind(post_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let visibility = visibility.ok_or_else(|| AppError::NotFound("post not found".into()))?;
+    if visibility == "platform" && !viewer.is_platform_authenticated() {
+        return Err(AppError::Forbidden(
+            "platform authentication required to view this post".into(),
+        ));
+    }
+    Ok(())
 }

@@ -8,7 +8,7 @@ import type {
 } from '../types/domain';
 
 export interface BoardFeedState {
-  boardId: string;
+  boardId: string | null;
   sort: PostSortOrder;
   posts: PostView[];
   nextCursor: string | null;
@@ -25,7 +25,7 @@ export interface PostDetailState {
   hasMore: boolean;
 }
 
-export function createBoardFeedState(boardId: string, sort: PostSortOrder): BoardFeedState {
+export function createBoardFeedState(boardId: string | null, sort: PostSortOrder): BoardFeedState {
   return {
     boardId,
     sort,
@@ -38,7 +38,7 @@ export function createBoardFeedState(boardId: string, sort: PostSortOrder): Boar
 }
 
 export function applyInitialBoardFeed(
-  boardId: string,
+  boardId: string | null,
   sort: PostSortOrder,
   page: PostListPage,
 ): BoardFeedState {
@@ -90,7 +90,7 @@ export function applyRealtimePostCreated(
     return { ...b, postCount: b.postCount + 1 };
   });
 
-  if (!feed || feed.boardId !== post.boardId) {
+  if (!feed || (feed.boardId !== null && feed.boardId !== post.boardId)) {
     return { boards: nextBoards, feed, incrementedBoard };
   }
   if (feed.posts.some((p) => p.id === post.id)) {

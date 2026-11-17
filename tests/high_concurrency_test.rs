@@ -10,10 +10,10 @@ use serde_json::{json, Value};
 use tokio::net::TcpSocket;
 use tokio::sync::Barrier;
 use tokio::time::timeout;
-use tokio_tungstenite::{client_async, connect_async};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message as WsMsg;
+use tokio_tungstenite::{client_async, connect_async};
 use uuid::Uuid;
 
 const AGENT_COUNT: usize = 24;
@@ -95,9 +95,10 @@ async fn high_concurrency_group_and_forum_storm_zero_deadlock_zero_gap_and_slow_
     let slow_sock = TcpSocket::new_v4().unwrap();
     slow_sock.set_recv_buffer_size(4096).unwrap();
     let slow_tcp = slow_sock.connect(app.addr).await.unwrap();
-    let (mut slow_ws, _) = client_async(slow_req, tokio_tungstenite::MaybeTlsStream::Plain(slow_tcp))
-        .await
-        .unwrap();
+    let (mut slow_ws, _) =
+        client_async(slow_req, tokio_tungstenite::MaybeTlsStream::Plain(slow_tcp))
+            .await
+            .unwrap();
     assert_eq!(recv_json(&mut slow_ws).await["type"], "connected");
 
     // 2. 挂载一个正常持续消费的快客户端，实时消化事件
@@ -191,7 +192,10 @@ async fn high_concurrency_group_and_forum_storm_zero_deadlock_zero_gap_and_slow_
                 });
                 let resp = app_ref
                     .client
-                    .post(format!("{}/api/v1/groups/{group_id}/messages", app_ref.base_url))
+                    .post(format!(
+                        "{}/api/v1/groups/{group_id}/messages",
+                        app_ref.base_url
+                    ))
                     .bearer_auth(&token)
                     .json(&payload)
                     .send()
@@ -207,7 +211,10 @@ async fn high_concurrency_group_and_forum_storm_zero_deadlock_zero_gap_and_slow_
                 if m % 5 == 0 {
                     let dup = app_ref
                         .client
-                        .post(format!("{}/api/v1/groups/{group_id}/messages", app_ref.base_url))
+                        .post(format!(
+                            "{}/api/v1/groups/{group_id}/messages",
+                            app_ref.base_url
+                        ))
                         .bearer_auth(&token)
                         .json(&payload)
                         .send()
@@ -221,7 +228,10 @@ async fn high_concurrency_group_and_forum_storm_zero_deadlock_zero_gap_and_slow_
                 let cid = format!("storm-c-{idx}-{c}");
                 let resp = app_ref
                     .client
-                    .post(format!("{}/api/v1/posts/{post_id}/comments", app_ref.base_url))
+                    .post(format!(
+                        "{}/api/v1/posts/{post_id}/comments",
+                        app_ref.base_url
+                    ))
                     .bearer_auth(&token)
                     .json(&json!({
                         "client_req_id": cid,
@@ -284,10 +294,21 @@ async fn high_concurrency_group_and_forum_storm_zero_deadlock_zero_gap_and_slow_
             ),
             None => format!("{}/api/v1/posts/{post_id}/comments?limit=35", app.base_url),
         };
-        let page: Value = app.client.get(url).send().await.unwrap().json().await.unwrap();
+        let page: Value = app
+            .client
+            .get(url)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
         for item in page["comments"].as_array().unwrap() {
             let id = Uuid::parse_str(item["id"].as_str().unwrap()).unwrap();
-            assert!(collected_comments.insert(id), "duplicate comment in cursor pagination");
+            assert!(
+                collected_comments.insert(id),
+                "duplicate comment in cursor pagination"
+            );
         }
         if !page["has_more"].as_bool().unwrap() {
             break;
@@ -330,7 +351,10 @@ async fn high_concurrency_group_and_forum_storm_zero_deadlock_zero_gap_and_slow_
         );
         if hot_targets.contains(&agent_id) {
             // 23 个其他 Agent * (10 条群 @ + 5 条评论 @) = 345 条定向通知！
-            assert_eq!(inbox_seqs.len(), (AGENT_COUNT - 1) * (MSGS_PER_AGENT + COMMENTS_PER_AGENT));
+            assert_eq!(
+                inbox_seqs.len(),
+                (AGENT_COUNT - 1) * (MSGS_PER_AGENT + COMMENTS_PER_AGENT)
+            );
         }
     }
 

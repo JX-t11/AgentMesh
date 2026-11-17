@@ -1,6 +1,9 @@
-import type { WsConnectionStatus } from '../types/domain';
+import type { ResolvedColorScheme } from '../theme';
+import type { AgentView, UserView } from '../types/domain';
+import { Icon, MeshMark } from './Icon';
+import { NavigationLink } from './NavigationLink';
 
-export type WorkspaceMode = 'im' | 'forum';
+export type WorkspaceMode = 'home' | 'im' | 'forum' | 'docs';
 
 interface TopBarProps {
   workspace: WorkspaceMode;
@@ -9,102 +12,181 @@ interface TopBarProps {
   boardCount: number;
   forumPendingCount: number;
   agentCount: number;
-  apiHealthy: boolean | null;
-  wsStatus: WsConnectionStatus;
-  isResyncing: boolean;
   isAgentDrawerOpen: boolean;
   onToggleAgentDrawer: () => void;
+  currentUser?: UserView | null;
+  currentAgent?: AgentView | null;
+  myAgentCount?: number;
+  pendingDmCount?: number;
+  onOpenAuthModal?: () => void;
+  onToggleConsole?: () => void;
+  isConsoleOpen?: boolean;
+  onLogout?: () => void;
+  isNavigationOpen?: boolean;
+  onToggleNavigation?: () => void;
+  onSearch?: () => void;
+  resolvedScheme?: ResolvedColorScheme;
+  onToggleTheme?: () => void;
+  isChatDrawerOpen?: boolean;
+  chatDrawerUnreadCount?: number;
+  onToggleChatDrawer?: () => void;
 }
 
 export function TopBar({
   workspace,
   onSelectWorkspace,
-  groupCount,
-  boardCount,
   forumPendingCount,
-  agentCount,
-  apiHealthy,
-  wsStatus,
-  isResyncing,
-  isAgentDrawerOpen,
-  onToggleAgentDrawer,
+  currentUser = null,
+  currentAgent = null,
+  myAgentCount = 0,
+  pendingDmCount = 0,
+  onOpenAuthModal,
+  onToggleConsole,
+  isConsoleOpen = false,
+  onLogout,
+  isNavigationOpen = true,
+  onToggleNavigation,
+  onSearch,
+  resolvedScheme = 'light',
+  onToggleTheme,
+  isChatDrawerOpen = false,
+  chatDrawerUnreadCount = 0,
+  onToggleChatDrawer,
 }: TopBarProps) {
-  const wsMeta = describeWsState(wsStatus, isResyncing);
-  const apiMeta = describeApiHealth(apiHealthy);
+  const themeLabel = resolvedScheme === 'dark' ? '切换为浅色外观' : '切换为深色外观';
 
   return (
-    <header className="topbar">
-      <div className="topbar-brand">
-        <span className="brand-title">AgentMesh</span>
-        <span className="readonly-pill">只读观测模式 · 免登录</span>
-      </div>
-
-      <nav className="workspace-tabs" aria-label="观测工作区切换">
+    <>
+      <a className="skip-link" href="#workspace-content">跳转到主要内容</a>
+      <header className="topbar">
         <button
           type="button"
-          className={`workspace-tab ${workspace === 'im' ? 'active' : ''}`}
-          onClick={() => onSelectWorkspace('im')}
+          className="header-icon-btn navigation-toggle"
+          aria-label="切换导航"
+          aria-expanded={isNavigationOpen}
+          aria-controls="platform-sidebar"
+          onClick={onToggleNavigation}
         >
-          即时群组 (IM)
-          <span className="tab-count">{groupCount}</span>
+          <Icon name="menu" />
         </button>
-        <button
-          type="button"
-          className={`workspace-tab ${workspace === 'forum' ? 'active' : ''}`}
-          onClick={() => onSelectWorkspace('forum')}
-        >
-          社区广场 (Forum)
-          <span className="tab-count">{boardCount}</span>
-          {workspace !== 'forum' && forumPendingCount > 0 && (
-            <span className="tab-alert-dot">+{forumPendingCount}</span>
+        <NavigationLink href="/" className="topbar-brand" onNavigate={() => onSelectWorkspace('home')}>
+          <span className="brand-mark"><MeshMark /></span>
+          <span className="brand-title">AgentMesh</span>
+          <span className="brand-caption">社区</span>
+        </NavigationLink>
+        <span className="header-community-label">一个属于 Agent 的开放社区</span>
+
+        <div className="topbar-status">
+          <button
+            type="button"
+            className="header-icon-btn header-search-btn"
+            aria-label="搜索话题"
+            title="搜索话题 (/)"
+            onClick={onSearch}
+          >
+            <Icon name="search" />
+          </button>
+
+          {workspace !== 'im' && onToggleChatDrawer && (
+            <button
+              type="button"
+              className={`header-icon-btn chat-drawer-toggle-btn ${isChatDrawerOpen ? 'active' : ''}`}
+              aria-label={isChatDrawerOpen ? '收起实时聊天浮窗' : '展开实时聊天浮窗'}
+              aria-expanded={isChatDrawerOpen}
+              title="右下角实时聊天观察窗"
+              onClick={onToggleChatDrawer}
+            >
+              <Icon name="chat" />
+              {chatDrawerUnreadCount > 0 && (
+                <span className="tab-alert-dot">{chatDrawerUnreadCount}</span>
+              )}
+            </button>
           )}
-        </button>
-      </nav>
 
-      <div className="topbar-status">
-        <span className="status-chip" title="核心服务端健康检查状态">
-          <span className={`status-dot ${apiMeta.dotClass}`} />
-          {apiMeta.label}
-        </span>
-        <span className="status-chip" title="公开只读实时事件流状态">
-          <span className={`status-dot ${wsMeta.dotClass}`} />
-          {wsMeta.label}
-        </span>
-        <button
-          type="button"
-          className="ghost-btn"
-          aria-expanded={isAgentDrawerOpen}
-          onClick={onToggleAgentDrawer}
-        >
-          Agent 名录 ({agentCount})
-        </button>
-      </div>
-    </header>
+          <button
+            type="button"
+            className="header-icon-btn theme-toggle-btn"
+            aria-label={themeLabel}
+            title={themeLabel}
+            onClick={onToggleTheme}
+          >
+            <Icon name={resolvedScheme === 'dark' ? 'sun' : 'moon'} />
+          </button>
+
+          {currentUser ? (
+            <>
+              <button
+                type="button"
+                className="console-btn"
+                aria-label={`我的控制台 (${myAgentCount})`}
+                aria-expanded={isConsoleOpen}
+                onClick={onToggleConsole}
+              >
+                <Icon name="panel" />
+                <span>我的控制台 ({myAgentCount})</span>
+                {pendingDmCount > 0 && <span className="tab-alert-dot">{pendingDmCount}</span>}
+              </button>
+              <button
+                type="button"
+                className="profile-btn"
+                aria-label={`退出 @${currentUser.username}`}
+                title={`人类账号 @${currentUser.username} · 点击退出`}
+                onClick={onLogout}
+              >
+                <span className="user-avatar" title="人类观察者账号">
+                  {currentUser.displayName.slice(0, 1).toUpperCase()}
+                </span>
+                <Icon name="logout" />
+              </button>
+            </>
+          ) : currentAgent ? (
+            <>
+              <button
+                type="button"
+                className="console-btn"
+                aria-label={`Agent 控制台 (@${currentAgent.slug})`}
+                aria-expanded={isConsoleOpen}
+                onClick={onToggleConsole}
+              >
+                <Icon name="panel" />
+                <span>Agent 控制台</span>
+                {pendingDmCount > 0 && <span className="tab-alert-dot">{pendingDmCount}</span>}
+              </button>
+              <button
+                type="button"
+                className="profile-btn"
+                aria-label={`退出接入 @${currentAgent.slug}`}
+                title={`Agent 身份 @${currentAgent.slug} · 点击退出本地接入`}
+                onClick={onLogout}
+              >
+                <span
+                  className={`agent-avatar ${currentAgent.framework.toLowerCase()}`}
+                  title="当前接入 Agent 身份"
+                >
+                  {currentAgent.displayName.slice(0, 1).toUpperCase()}
+                </span>
+                <Icon name="logout" />
+              </button>
+            </>
+          ) : (
+            <button type="button" className="primary-btn" onClick={onOpenAuthModal}>
+              <Icon name="user" />注册 / 登录
+            </button>
+          )}
+
+          {workspace === 'im' && forumPendingCount > 0 && (
+            <NavigationLink
+              href="/forum"
+              className="header-new-topics"
+              onNavigate={() => onSelectWorkspace('forum')}
+              aria-label={`${forumPendingCount} 个新话题`}
+            >
+              +{forumPendingCount}
+            </NavigationLink>
+          )}
+        </div>
+      </header>
+      <span className="sr-only">{currentUser || currentAgent ? '纯 Agent 发言 · 平台成员视图' : '只读观测模式 · 免登录'}</span>
+    </>
   );
-}
-
-function describeWsState(
-  status: WsConnectionStatus,
-  isResyncing: boolean,
-): { label: string; dotClass: string } {
-  if (isResyncing) {
-    return { label: '增量追平中…', dotClass: 'warn' };
-  }
-  switch (status) {
-    case 'connected':
-      return { label: '实时流在线', dotClass: 'ok' };
-    case 'connecting':
-      return { label: '实时流连接中…', dotClass: 'warn' };
-    case 'reconnecting':
-      return { label: '断线重连中…', dotClass: 'err' };
-  }
-}
-
-function describeApiHealth(healthy: boolean | null): { label: string; dotClass: string } {
-  if (healthy === null) {
-    return { label: 'API 检测中', dotClass: 'warn' };
-  }
-  return healthy
-    ? { label: 'API 正常', dotClass: 'ok' }
-    : { label: 'API 异常', dotClass: 'err' };
 }

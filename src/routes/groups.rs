@@ -9,9 +9,10 @@ use sqlx::types::Json as SqlxJson;
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use crate::auth::{AdminAuth, AgentAuth};
+use crate::auth::{AgentAuth, AgentOrOwnerAuth, OptionalViewer};
 use crate::domain::types::{
-    ClientReqId, DescriptionText, MessageBody, PageLimit, ShortName, Slug, UniqueAgentIds,
+    CapabilityList, ClientReqId, DescriptionText, GroupJoinPolicy, GroupVisibility, MessageBody,
+    PageLimit, ShortName, Slug, UniqueAgentIds,
 };
 use crate::error::{AppError, AppJson, AppQuery};
 use crate::events::{encode_event, AgentSignal};
@@ -24,6 +25,12 @@ pub struct CreateGroupRequest {
     pub name: ShortName,
     #[serde(default)]
     pub description: DescriptionText,
+    #[serde(default)]
+    pub visibility: GroupVisibility,
+    #[serde(default)]
+    pub join_policy: GroupJoinPolicy,
+    #[serde(default)]
+    pub required_capabilities: CapabilityList,
     #[serde(default)]
     pub member_agent_ids: UniqueAgentIds,
 }
@@ -58,6 +65,12 @@ pub struct GroupView {
     pub slug: String,
     pub name: String,
     pub description: String,
+    pub is_dm: bool,
+    pub visibility: String,
+    pub join_policy: String,
+    pub required_capabilities: Vec<String>,
+    pub creator_user_id: Option<Uuid>,
+    pub creator_agent_id: Option<Uuid>,
     pub last_seq: i64,
     pub member_count: i64,
     pub created_at: DateTime<Utc>,
@@ -69,6 +82,7 @@ pub struct GroupMemberView {
     pub slug: String,
     pub display_name: String,
     pub framework: String,
+    pub capabilities: Vec<String>,
     pub joined_at: DateTime<Utc>,
 }
 
@@ -117,6 +131,7 @@ pub struct GroupMessagesListResponse {
 struct CreatedInboxEntry {
     recipient_agent_id: Uuid,
     inbox_seq: i64,
+    kind: String,
     created_at: DateTime<Utc>,
 }
 
@@ -138,13 +153,20 @@ struct PostGroupMsgCteRow {
 }
 
 pub async fn create_group(
-    _admin: AdminAuth,
+    caller: AgentOrOwnerAuth,
     State(state): State<AppState>,
     AppJson(req): AppJson<CreateGroupRequest>,
 ) -> Result<(StatusCode, Json<GroupEnvelope>), AppError> {
-    let group_id = Uuid::new_v4();
-    let initial_members = req.member_agent_ids.as_slice();
+    validate_group_policy_combination(req.join_policy, &req.required_capabilities)?;
+    let (creator_user_id, creator_agent_id, initial_members) = resolve_group_creation_caller(
+        &state,
+        &caller,
+        req.visibility,
+        req.member_agent_ids.as_slice(),
+    )
+    .await?;
 
+    let group_id = Uuid::new_v4();
     let row: Option<(bool, Option<Uuid>)> = sqlx::query_as(
         "WITH valid_agents AS (
              SELECT COUNT(*) = cardinality($5::uuid[]) AS all_exist
@@ -152,8 +174,11 @@ pub async fn create_group(
              WHERE id = ANY($5::uuid[])
          ),
          ins_group AS (
-             INSERT INTO groups (id, slug, name, description)
-             SELECT $1, $2, $3, $4
+             INSERT INTO groups (
+                 id, slug, name, description, visibility, join_policy,
+                 required_capabilities, creator_user_id, creator_agent_id
+             )
+             SELECT $1, $2, $3, $4, $6, $7, $8, $9, $10
              FROM valid_agents
              WHERE all_exist
              RETURNING id
@@ -170,7 +195,12 @@ pub async fn create_group(
     .bind(req.slug.as_str())
     .bind(req.name.as_str())
     .bind(req.description.as_str())
-    .bind(initial_members)
+    .bind(&initial_members)
+    .bind(req.visibility.as_str())
+    .bind(req.join_policy.as_str())
+    .bind(req.required_capabilities.as_slice())
+    .bind(creator_user_id)
+    .bind(creator_agent_id)
     .fetch_optional(&state.db)
     .await
     .map_err(map_group_slug_conflict)?;
@@ -182,17 +212,82 @@ pub async fn create_group(
         ));
     }
 
-    notify_members_joined(&state, group_id, req.slug.as_str(), initial_members);
+    notify_members_joined(&state, group_id, req.slug.as_str(), &initial_members);
     let group = fetch_group_view(&state, group_id).await?;
     Ok((StatusCode::CREATED, Json(GroupEnvelope { group })))
 }
 
+pub async fn join_group(
+    AgentAuth(principal): AgentAuth,
+    State(state): State<AppState>,
+    Path(group_id): Path<Uuid>,
+) -> Result<Json<GroupEnvelope>, AppError> {
+    let outcome: (bool, bool, bool, Option<String>) = sqlx::query_as(
+        "WITH grp AS (
+             SELECT id, slug, is_dm, join_policy, required_capabilities
+             FROM groups
+             WHERE id = $1
+         ),
+         ag AS (
+             SELECT id, capabilities FROM agents WHERE id = $2
+         ),
+         policy_check AS (
+             SELECT
+                 EXISTS(SELECT 1 FROM grp) AS group_exists,
+                 COALESCE(
+                     (SELECT (NOT g.is_dm)
+                         AND g.join_policy IN ('open', 'capability_restricted')
+                         AND (g.join_policy = 'open' OR a.capabilities @> g.required_capabilities)
+                      FROM grp g CROSS JOIN ag a),
+                     FALSE
+                 ) AS allowed,
+                 (SELECT slug FROM grp) AS group_slug
+         ),
+         ins AS (
+             INSERT INTO group_members (group_id, agent_id)
+             SELECT $1, $2
+             FROM policy_check pc
+             WHERE pc.group_exists AND pc.allowed
+             ON CONFLICT (group_id, agent_id) DO NOTHING
+             RETURNING agent_id
+         )
+         SELECT
+             pc.group_exists,
+             pc.allowed,
+             EXISTS(SELECT 1 FROM ins) AS newly_joined,
+             pc.group_slug
+         FROM policy_check pc",
+    )
+    .bind(group_id)
+    .bind(principal.id)
+    .fetch_one(&state.db)
+    .await?;
+
+    if !outcome.0 {
+        return Err(AppError::NotFound("group not found".into()));
+    }
+    if !outcome.1 {
+        return Err(AppError::Forbidden(
+            "group is invite-only or agent lacks required capabilities".into(),
+        ));
+    }
+    if outcome.2 {
+        if let Some(slug) = outcome.3.as_deref() {
+            notify_members_joined(&state, group_id, slug, &[principal.id]);
+        }
+    }
+
+    let group = fetch_group_view(&state, group_id).await?;
+    Ok(Json(GroupEnvelope { group }))
+}
+
 pub async fn add_group_members(
-    _admin: AdminAuth,
+    caller: AgentOrOwnerAuth,
     State(state): State<AppState>,
     Path(group_id): Path<Uuid>,
     AppJson(req): AppJson<AddGroupMembersRequest>,
 ) -> Result<Json<GroupMembersResponse>, AppError> {
+    ensure_can_manage_group_members(&state, &caller, group_id).await?;
     let target_ids = collect_requested_member_ids(req)?;
 
     let outcome: (bool, bool, Vec<Uuid>) = sqlx::query_as(
@@ -243,10 +338,12 @@ pub async fn add_group_members(
 }
 
 pub async fn remove_group_member(
-    _admin: AdminAuth,
+    caller: AgentOrOwnerAuth,
     State(state): State<AppState>,
     Path((group_id, agent_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, AppError> {
+    ensure_can_manage_group_members(&state, &caller, group_id).await?;
+
     let outcome: (bool, bool) = sqlx::query_as(
         "WITH grp AS (
              SELECT id FROM groups WHERE id = $1
@@ -280,41 +377,112 @@ pub async fn remove_group_member(
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn list_groups(State(state): State<AppState>) -> Result<Json<GroupListResponse>, AppError> {
-    let groups = sqlx::query_as::<_, GroupView>(
-        "SELECT g.id, g.slug, g.name, g.description, g.last_seq,
-                COUNT(gm.agent_id) AS member_count, g.created_at
-         FROM groups g
-         LEFT JOIN group_members gm ON gm.group_id = g.id
-         GROUP BY g.id
-         ORDER BY g.created_at ASC, g.id ASC",
-    )
-    .fetch_all(&state.db)
-    .await?;
+pub async fn list_groups(
+    viewer: OptionalViewer,
+    State(state): State<AppState>,
+) -> Result<Json<GroupListResponse>, AppError> {
+    let groups = match viewer {
+        OptionalViewer::Anonymous => {
+            sqlx::query_as::<_, GroupView>(
+                "SELECT g.id, g.slug, g.name, g.description, g.is_dm, g.visibility,
+                        g.join_policy, g.required_capabilities, g.creator_user_id, g.creator_agent_id,
+                        g.last_seq, COUNT(gm.agent_id) AS member_count, g.created_at
+                 FROM groups g
+                 LEFT JOIN group_members gm ON gm.group_id = g.id
+                 WHERE g.is_dm = FALSE AND g.visibility = 'public'
+                 GROUP BY g.id
+                 ORDER BY g.created_at ASC, g.id ASC",
+            )
+            .fetch_all(&state.db)
+            .await?
+        }
+        OptionalViewer::Admin => {
+            sqlx::query_as::<_, GroupView>(
+                "SELECT g.id, g.slug, g.name, g.description, g.is_dm, g.visibility,
+                        g.join_policy, g.required_capabilities, g.creator_user_id, g.creator_agent_id,
+                        g.last_seq, COUNT(gm.agent_id) AS member_count, g.created_at
+                 FROM groups g
+                 LEFT JOIN group_members gm ON gm.group_id = g.id
+                 WHERE g.is_dm = FALSE
+                 GROUP BY g.id
+                 ORDER BY g.created_at ASC, g.id ASC",
+            )
+            .fetch_all(&state.db)
+            .await?
+        }
+        OptionalViewer::Agent(agent) => {
+            sqlx::query_as::<_, GroupView>(
+                "SELECT g.id, g.slug, g.name, g.description, g.is_dm, g.visibility,
+                        g.join_policy, g.required_capabilities, g.creator_user_id, g.creator_agent_id,
+                        g.last_seq, COUNT(gm.agent_id) AS member_count, g.created_at
+                 FROM groups g
+                 LEFT JOIN group_members gm ON gm.group_id = g.id
+                 WHERE g.is_dm = FALSE
+                   AND (
+                       g.visibility = 'public'
+                       OR g.creator_agent_id = $1
+                       OR EXISTS (
+                           SELECT 1 FROM group_members gm_self
+                           WHERE gm_self.group_id = g.id AND gm_self.agent_id = $1
+                       )
+                   )
+                 GROUP BY g.id
+                 ORDER BY g.created_at ASC, g.id ASC",
+            )
+            .bind(agent.id)
+            .fetch_all(&state.db)
+            .await?
+        }
+        OptionalViewer::User(user) => {
+            sqlx::query_as::<_, GroupView>(
+                "SELECT g.id, g.slug, g.name, g.description, g.is_dm, g.visibility,
+                        g.join_policy, g.required_capabilities, g.creator_user_id, g.creator_agent_id,
+                        g.last_seq, COUNT(gm.agent_id) AS member_count, g.created_at
+                 FROM groups g
+                 LEFT JOIN group_members gm ON gm.group_id = g.id
+                 WHERE g.is_dm = FALSE
+                   AND (
+                       g.visibility = 'public'
+                       OR g.creator_user_id = $1
+                       OR EXISTS (
+                           SELECT 1 FROM agents ca
+                           WHERE ca.id = g.creator_agent_id AND ca.owner_user_id = $1
+                       )
+                       OR EXISTS (
+                           SELECT 1
+                           FROM group_members gm_owned
+                           JOIN agents a_owned ON a_owned.id = gm_owned.agent_id
+                           WHERE gm_owned.group_id = g.id AND a_owned.owner_user_id = $1
+                       )
+                   )
+                 GROUP BY g.id
+                 ORDER BY g.created_at ASC, g.id ASC",
+            )
+            .bind(user.id)
+            .fetch_all(&state.db)
+            .await?
+        }
+    };
 
     Ok(Json(GroupListResponse { groups }))
 }
 
 pub async fn get_group(
+    viewer: OptionalViewer,
     State(state): State<AppState>,
     Path(group_id): Path<Uuid>,
 ) -> Result<Json<GroupEnvelope>, AppError> {
+    ensure_can_view_group(&state, group_id, &viewer).await?;
     let group = fetch_group_view(&state, group_id).await?;
     Ok(Json(GroupEnvelope { group }))
 }
 
 pub async fn list_group_members(
+    viewer: OptionalViewer,
     State(state): State<AppState>,
     Path(group_id): Path<Uuid>,
 ) -> Result<Json<GroupMembersResponse>, AppError> {
-    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM groups WHERE id = $1)")
-        .bind(group_id)
-        .fetch_one(&state.db)
-        .await?;
-    if !exists {
-        return Err(AppError::NotFound("group not found".into()));
-    }
-
+    ensure_can_view_group(&state, group_id, &viewer).await?;
     let members = fetch_group_members(&state, group_id).await?;
     Ok(Json(GroupMembersResponse { group_id, members }))
 }
@@ -402,7 +570,8 @@ pub async fn post_group_message(
     }
 
     let inbox_entries = std::mem::take(&mut row.inbox_entries.0);
-    let message = extract_msg_from_cte_row(group_id, principal.id, req.client_msg_id.as_str(), row)?;
+    let message =
+        extract_msg_from_cte_row(group_id, principal.id, req.client_msg_id.as_str(), row)?;
 
     let group_frame = encode_event(&json!({
         "type": "group_message",
@@ -413,7 +582,7 @@ pub async fn post_group_message(
     for entry in inbox_entries {
         let inbox_view = InboxEventView {
             inbox_seq: entry.inbox_seq,
-            kind: "group_mention".into(),
+            kind: entry.kind,
             source_id: message.id,
             group_id: Some(group_id),
             post_id: None,
@@ -435,6 +604,7 @@ pub async fn post_group_message(
 }
 
 pub async fn list_group_messages(
+    viewer: OptionalViewer,
     State(state): State<AppState>,
     Path(group_id): Path<Uuid>,
     AppQuery(query): AppQuery<ListGroupMessagesQuery>,
@@ -444,6 +614,7 @@ pub async fn list_group_messages(
             "cannot specify both after_seq and before_seq".into(),
         ));
     }
+    ensure_can_view_group(&state, group_id, &viewer).await?;
 
     let fetch_limit = query.limit.get() + 1;
     let (mut messages, reverse_needed) = if let Some(after_seq) = query.after_seq {
@@ -498,16 +669,6 @@ pub async fn list_group_messages(
         (rows, true)
     };
 
-    if messages.is_empty() {
-        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM groups WHERE id = $1)")
-            .bind(group_id)
-            .fetch_one(&state.db)
-            .await?;
-        if !exists {
-            return Err(AppError::NotFound("group not found".into()));
-        }
-    }
-
     let has_more = messages.len() as i64 > query.limit.get();
     if has_more {
         messages.pop();
@@ -539,7 +700,7 @@ async fn execute_post_group_msg_cte(
 ) -> Result<PostGroupMsgCteRow, sqlx::Error> {
     sqlx::query_as::<_, PostGroupMsgCteRow>(
         "WITH grp AS (
-             SELECT id FROM groups WHERE id = $2
+             SELECT id, is_dm FROM groups WHERE id = $2
          ),
          member_ok AS (
              SELECT EXISTS(
@@ -587,13 +748,27 @@ async fn execute_post_group_msg_cte(
              FROM next_seq ns
              RETURNING id, seq, content, reply_to_msg_id, mention_agent_ids, created_at
          ),
-         -- 按 agent_id 升序加 FOR NO KEY UPDATE 锁：既消除交叉 @ 死锁，又不阻塞其他表外键引用
-         locked_agents AS (
-             SELECT id
-             FROM agents
-             WHERE id = ANY($9::uuid[])
+         -- 合并显式 @ 与双人私聊对端自动唤醒，按 agent_id 升序加 FOR NO KEY UPDATE 锁消除死锁
+         raw_targets AS (
+             SELECT DISTINCT ON (aid) aid, kind
+             FROM (
+                 SELECT u.aid AS aid, 'group_mention'::text AS kind, 1 AS prio
+                 FROM UNNEST($9::uuid[]) AS u(aid)
+                 UNION ALL
+                 SELECT gm.agent_id AS aid, 'dm_message'::text AS kind, 2 AS prio
+                 FROM group_members gm
+                 JOIN grp g ON g.id = gm.group_id
+                 WHERE g.is_dm AND gm.agent_id <> $3
+             ) candidates
+             WHERE aid <> $3
                AND EXISTS(SELECT 1 FROM inserted_msg)
-             ORDER BY id ASC
+             ORDER BY aid ASC, prio ASC
+         ),
+         locked_agents AS (
+             SELECT a.id, rt.kind
+             FROM agents a
+             JOIN raw_targets rt ON rt.aid = a.id
+             ORDER BY a.id ASC
              FOR NO KEY UPDATE
          ),
          bumped_agents AS (
@@ -601,16 +776,16 @@ async fn execute_post_group_msg_cte(
              SET last_inbox_seq = a.last_inbox_seq + 1
              FROM locked_agents la
              WHERE a.id = la.id
-             RETURNING a.id AS recipient_agent_id, a.last_inbox_seq AS inbox_seq
+             RETURNING a.id AS recipient_agent_id, a.last_inbox_seq AS inbox_seq, la.kind
          ),
          inserted_inbox AS (
              INSERT INTO inbox_events (
                  recipient_agent_id, inbox_seq, kind, source_id, group_id, actor_agent_id, summary
              )
-             SELECT ba.recipient_agent_id, ba.inbox_seq, 'group_mention', im.id, $2, $3, $10
+             SELECT ba.recipient_agent_id, ba.inbox_seq, ba.kind, im.id, $2, $3, $10
              FROM bumped_agents ba
              CROSS JOIN inserted_msg im
-             RETURNING recipient_agent_id, inbox_seq, created_at
+             RETURNING recipient_agent_id, inbox_seq, kind, created_at
          )
          SELECT
              EXISTS(SELECT 1 FROM grp) AS group_exists,
@@ -629,6 +804,7 @@ async fn execute_post_group_msg_cte(
                  (SELECT json_agg(json_build_object(
                      'recipient_agent_id', recipient_agent_id,
                      'inbox_seq', inbox_seq,
+                     'kind', kind,
                      'created_at', created_at
                  )) FROM inserted_inbox),
                  '[]'::json
@@ -766,10 +942,14 @@ pub(crate) fn truncate_summary(content: &str, max_chars: usize) -> String {
     out
 }
 
-async fn fetch_group_view(state: &AppState, group_id: Uuid) -> Result<GroupView, AppError> {
+pub(crate) async fn fetch_group_view(
+    state: &AppState,
+    group_id: Uuid,
+) -> Result<GroupView, AppError> {
     sqlx::query_as::<_, GroupView>(
-        "SELECT g.id, g.slug, g.name, g.description, g.last_seq,
-                COUNT(gm.agent_id) AS member_count, g.created_at
+        "SELECT g.id, g.slug, g.name, g.description, g.is_dm, g.visibility,
+                g.join_policy, g.required_capabilities, g.creator_user_id, g.creator_agent_id,
+                g.last_seq, COUNT(gm.agent_id) AS member_count, g.created_at
          FROM groups g
          LEFT JOIN group_members gm ON gm.group_id = g.id
          WHERE g.id = $1
@@ -786,7 +966,7 @@ async fn fetch_group_members(
     group_id: Uuid,
 ) -> Result<Vec<GroupMemberView>, AppError> {
     sqlx::query_as::<_, GroupMemberView>(
-        "SELECT a.id AS agent_id, a.slug, a.display_name, a.framework, gm.joined_at
+        "SELECT a.id AS agent_id, a.slug, a.display_name, a.framework, a.capabilities, gm.joined_at
          FROM group_members gm
          JOIN agents a ON a.id = gm.agent_id
          WHERE gm.group_id = $1
@@ -813,7 +993,12 @@ fn collect_requested_member_ids(req: AddGroupMembersRequest) -> Result<Vec<Uuid>
     Ok(ids)
 }
 
-fn notify_members_joined(state: &AppState, group_id: Uuid, group_slug: &str, agent_ids: &[Uuid]) {
+pub(crate) fn notify_members_joined(
+    state: &AppState,
+    group_id: Uuid,
+    group_slug: &str,
+    agent_ids: &[Uuid],
+) {
     if agent_ids.is_empty() {
         return;
     }
@@ -830,6 +1015,268 @@ fn notify_members_joined(state: &AppState, group_id: Uuid, group_slug: &str, age
                 frame: frame.clone(),
             },
         );
+    }
+}
+
+pub(crate) async fn ensure_can_subscribe_group_stream(
+    state: &AppState,
+    group_id: Uuid,
+    viewer: &OptionalViewer,
+) -> Result<(), AppError> {
+    match ensure_can_view_group(state, group_id, viewer).await {
+        Ok(()) | Err(AppError::NotFound(_)) => Ok(()),
+        Err(other) => Err(other),
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct GroupAccessRow {
+    is_dm: bool,
+    visibility: String,
+    creator_user_id: Option<Uuid>,
+    creator_agent_id: Option<Uuid>,
+    creator_agent_owner_user_id: Option<Uuid>,
+}
+
+pub(crate) async fn ensure_can_view_group(
+    state: &AppState,
+    group_id: Uuid,
+    viewer: &OptionalViewer,
+) -> Result<(), AppError> {
+    let row: Option<GroupAccessRow> = sqlx::query_as(
+        "SELECT g.is_dm,
+                g.visibility,
+                g.creator_user_id,
+                g.creator_agent_id,
+                ca.owner_user_id AS creator_agent_owner_user_id
+         FROM groups g
+         LEFT JOIN agents ca ON ca.id = g.creator_agent_id
+         WHERE g.id = $1",
+    )
+    .bind(group_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let row = row.ok_or_else(|| AppError::NotFound("group not found".into()))?;
+
+    if !row.is_dm && row.visibility == "public" {
+        return Ok(());
+    }
+
+    match viewer {
+        OptionalViewer::Anonymous => Err(AppError::Forbidden(
+            "authorization required to access private group or DM channel".into(),
+        )),
+        OptionalViewer::Admin => Ok(()),
+        OptionalViewer::Agent(agent) => {
+            if !row.is_dm && row.creator_agent_id == Some(agent.id) {
+                return Ok(());
+            }
+            let is_member: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM group_members WHERE group_id = $1 AND agent_id = $2)",
+            )
+            .bind(group_id)
+            .bind(agent.id)
+            .fetch_one(&state.db)
+            .await?;
+            if is_member {
+                Ok(())
+            } else {
+                Err(AppError::Forbidden(
+                    "agent is not a member of this private group or DM".into(),
+                ))
+            }
+        }
+        OptionalViewer::User(user) => {
+            if !row.is_dm
+                && (row.creator_user_id == Some(user.id)
+                    || row.creator_agent_owner_user_id == Some(user.id))
+            {
+                return Ok(());
+            }
+            let owns_member: bool = sqlx::query_scalar(
+                "SELECT EXISTS(
+                     SELECT 1
+                     FROM group_members gm
+                     JOIN agents a ON a.id = gm.agent_id
+                     WHERE gm.group_id = $1 AND a.owner_user_id = $2
+                 )",
+            )
+            .bind(group_id)
+            .bind(user.id)
+            .fetch_one(&state.db)
+            .await?;
+            if owns_member {
+                Ok(())
+            } else {
+                Err(AppError::Forbidden(
+                    "none of your agents belong to this private group or DM".into(),
+                ))
+            }
+        }
+    }
+}
+
+async fn resolve_group_creation_caller(
+    state: &AppState,
+    caller: &AgentOrOwnerAuth,
+    visibility: GroupVisibility,
+    requested_members: &[Uuid],
+) -> Result<(Option<Uuid>, Option<Uuid>, Vec<Uuid>), AppError> {
+    if !matches!(caller, AgentOrOwnerAuth::Admin) && visibility == GroupVisibility::Public {
+        return Err(AppError::Forbidden(
+            "public groups can only be created by platform administrators".into(),
+        ));
+    }
+
+    match caller {
+        AgentOrOwnerAuth::Admin => Ok((None, None, requested_members.to_vec())),
+        AgentOrOwnerAuth::User(user) => {
+            enforce_owner_user_private_group_quota(state, user.id).await?;
+            Ok((Some(user.id), None, requested_members.to_vec()))
+        }
+        AgentOrOwnerAuth::Agent(agent) => {
+            let owner_row: Option<(Option<Uuid>,)> =
+                sqlx::query_as("SELECT owner_user_id FROM agents WHERE id = $1")
+                    .bind(agent.id)
+                    .fetch_optional(&state.db)
+                    .await?;
+            let (owner_user_id,) =
+                owner_row.ok_or_else(|| AppError::Unauthorized("agent no longer exists".into()))?;
+
+            if let Some(uid) = owner_user_id {
+                enforce_owner_user_private_group_quota(state, uid).await?;
+            } else {
+                let count: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*)
+                     FROM groups
+                     WHERE is_dm = FALSE
+                       AND visibility = 'private'
+                       AND creator_agent_id = $1",
+                )
+                .bind(agent.id)
+                .fetch_one(&state.db)
+                .await?;
+                if count >= state.max_private_groups_per_owner {
+                    return Err(AppError::Forbidden(format!(
+                        "private group limit reached (max {} per owner)",
+                        state.max_private_groups_per_owner
+                    )));
+                }
+            }
+
+            let mut initial_members = requested_members.to_vec();
+            initial_members.push(agent.id);
+            initial_members.sort_unstable();
+            initial_members.dedup();
+            Ok((None, Some(agent.id), initial_members))
+        }
+    }
+}
+
+async fn enforce_owner_user_private_group_quota(
+    state: &AppState,
+    owner_user_id: Uuid,
+) -> Result<(), AppError> {
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)
+         FROM groups g
+         WHERE g.is_dm = FALSE
+           AND g.visibility = 'private'
+           AND (
+               g.creator_user_id = $1
+               OR EXISTS (
+                   SELECT 1 FROM agents a
+                   WHERE a.id = g.creator_agent_id AND a.owner_user_id = $1
+               )
+           )",
+    )
+    .bind(owner_user_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    if count >= state.max_private_groups_per_owner {
+        return Err(AppError::Forbidden(format!(
+            "private group limit reached (max {} per owner)",
+            state.max_private_groups_per_owner
+        )));
+    }
+    Ok(())
+}
+
+fn validate_group_policy_combination(
+    join_policy: GroupJoinPolicy,
+    required_capabilities: &CapabilityList,
+) -> Result<(), AppError> {
+    if join_policy == GroupJoinPolicy::CapabilityRestricted && required_capabilities.is_empty() {
+        return Err(AppError::Unprocessable(
+            "capability_restricted group requires at least one capability tag".into(),
+        ));
+    }
+    if join_policy != GroupJoinPolicy::CapabilityRestricted && !required_capabilities.is_empty() {
+        return Err(AppError::Unprocessable(
+            "required_capabilities is only allowed when join_policy is capability_restricted"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+#[derive(sqlx::FromRow)]
+struct GroupManageRow {
+    is_dm: bool,
+    creator_user_id: Option<Uuid>,
+    creator_agent_id: Option<Uuid>,
+    creator_agent_owner_user_id: Option<Uuid>,
+}
+
+async fn ensure_can_manage_group_members(
+    state: &AppState,
+    caller: &AgentOrOwnerAuth,
+    group_id: Uuid,
+) -> Result<(), AppError> {
+    let row: Option<GroupManageRow> = sqlx::query_as(
+        "SELECT g.is_dm,
+                g.creator_user_id,
+                g.creator_agent_id,
+                ca.owner_user_id AS creator_agent_owner_user_id
+         FROM groups g
+         LEFT JOIN agents ca ON ca.id = g.creator_agent_id
+         WHERE g.id = $1",
+    )
+    .bind(group_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let row = row.ok_or_else(|| AppError::NotFound("group not found".into()))?;
+    if row.is_dm {
+        return Err(AppError::Forbidden(
+            "cannot modify members of a direct message channel".into(),
+        ));
+    }
+
+    match caller {
+        AgentOrOwnerAuth::Admin => Ok(()),
+        AgentOrOwnerAuth::User(user) => {
+            if row.creator_user_id == Some(user.id)
+                || row.creator_agent_owner_user_id == Some(user.id)
+            {
+                Ok(())
+            } else {
+                Err(AppError::Forbidden(
+                    "only the group creator or admin can manage group members".into(),
+                ))
+            }
+        }
+        AgentOrOwnerAuth::Agent(agent) => {
+            if row.creator_agent_id == Some(agent.id) {
+                Ok(())
+            } else {
+                Err(AppError::Forbidden(
+                    "only the group creator or admin can manage group members".into(),
+                ))
+            }
+        }
     }
 }
 

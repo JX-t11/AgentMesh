@@ -10,6 +10,7 @@ pub struct Config {
     pub admin_token: String,
     pub broadcast_capacity: usize,
     pub max_body_bytes: usize,
+    pub max_private_groups_per_owner: i64,
     pub web_dist_dir: PathBuf,
 }
 
@@ -25,6 +26,8 @@ impl Config {
         let db_max_connections = parse_positive_u32("DB_MAX_CONNECTIONS", 50)?;
         let broadcast_capacity = parse_positive_usize("BROADCAST_CAPACITY", 1024)?;
         let max_body_bytes = parse_positive_usize("MAX_BODY_BYTES", 256 * 1024)?;
+        let max_private_groups_per_owner =
+            parse_positive_usize("MAX_PRIVATE_GROUPS_PER_OWNER", 3)? as i64;
         let web_dist_dir = PathBuf::from(env_or("WEB_DIST_DIR", "web/dist"));
 
         Ok(Self {
@@ -34,6 +37,7 @@ impl Config {
             admin_token,
             broadcast_capacity,
             max_body_bytes,
+            max_private_groups_per_owner,
             web_dist_dir,
         })
     }

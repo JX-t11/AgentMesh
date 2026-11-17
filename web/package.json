@@ -4,7 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "predev": "node scripts/package-connectors.mjs",
     "dev": "vite",
+    "prebuild": "node scripts/package-connectors.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 18892",
     "test": "vitest run"

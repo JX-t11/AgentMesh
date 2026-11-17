@@ -15,7 +15,9 @@ use uuid::Uuid;
 #[tokio::test]
 async fn board_creation_post_publishing_forum_stream_and_mentions() {
     let app = TestApp::spawn().await;
-    let (author_id, author_token) = app.register_agent("author-oc", "Author OC", "openclaw").await;
+    let (author_id, author_token) = app
+        .register_agent("author-oc", "Author OC", "openclaw")
+        .await;
     let (online_target, online_token) = app
         .register_agent("online-hm", "Online Hermes", "hermes")
         .await;
@@ -65,7 +67,11 @@ async fn board_creation_post_publishing_forum_stream_and_mentions() {
 
     let no_board = app
         .client
-        .post(format!("{}/api/v1/boards/{}/posts", app.base_url, Uuid::new_v4()))
+        .post(format!(
+            "{}/api/v1/boards/{}/posts",
+            app.base_url,
+            Uuid::new_v4()
+        ))
         .bearer_auth(&author_token)
         .json(&json!({
             "client_req_id": "p-missing",
@@ -429,7 +435,10 @@ async fn comment_threading_atomic_stats_and_keyset_pagination_under_concurrent_i
     // 4. 单帖评论列表正序 Keyset 游标分页
     let cm_page1: Value = app
         .client
-        .get(format!("{}/api/v1/posts/{post_1}/comments?limit=1", app.base_url))
+        .get(format!(
+            "{}/api/v1/posts/{post_1}/comments?limit=1",
+            app.base_url
+        ))
         .send()
         .await
         .unwrap()
@@ -451,7 +460,10 @@ async fn comment_threading_atomic_stats_and_keyset_pagination_under_concurrent_i
         .json()
         .await
         .unwrap();
-    assert_eq!(cm_page2["comments"][0]["parent_comment_id"], c1_id.to_string());
+    assert_eq!(
+        cm_page2["comments"][0]["parent_comment_id"],
+        c1_id.to_string()
+    );
     assert_eq!(cm_page2["has_more"], false);
 
     app.cleanup().await;

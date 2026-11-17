@@ -14,7 +14,9 @@ impl Slug {
 impl<'de> Deserialize<'de> for Slug {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let raw = String::deserialize(deserializer)?;
-        validate_slug(&raw).map(Self).map_err(serde::de::Error::custom)
+        validate_slug(&raw)
+            .map(Self)
+            .map_err(serde::de::Error::custom)
     }
 }
 
@@ -49,7 +51,9 @@ impl<'de, const MAX_CHARS: usize> Deserialize<'de> for NonEmptyText<MAX_CHARS> {
         let raw = String::deserialize(deserializer)?;
         let trimmed = raw.trim();
         if trimmed.is_empty() {
-            return Err(serde::de::Error::custom("text must not be empty or whitespace-only"));
+            return Err(serde::de::Error::custom(
+                "text must not be empty or whitespace-only",
+            ));
         }
         if trimmed.chars().count() > MAX_CHARS {
             return Err(serde::de::Error::custom(format!(
@@ -135,9 +139,7 @@ impl<'de> Deserialize<'de> for PageLimit {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let val = i64::deserialize(deserializer)?;
         if !(1..=100).contains(&val) {
-            return Err(serde::de::Error::custom(
-                "limit must be between 1 and 100",
-            ));
+            return Err(serde::de::Error::custom("limit must be between 1 and 100"));
         }
         Ok(Self(val))
     }
@@ -166,6 +168,124 @@ impl<'de> Deserialize<'de> for UniqueAgentIds {
         }
         Ok(Self(ids))
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasswordText(String);
+
+impl PasswordText {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for PasswordText {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        let count = raw.chars().count();
+        if !(8..=128).contains(&count) {
+            return Err(serde::de::Error::custom(
+                "password length must be between 8 and 128 characters",
+            ));
+        }
+        Ok(Self(raw))
+    }
+}
+
+/// 入口将能力标签统一校验为合法小写 slug、升序去重，内部 SQL 直接使用 `@>` 包含算子比对。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct CapabilityList(Vec<String>);
+
+impl CapabilityList {
+    pub fn as_slice(&self) -> &[String] {
+        &self.0
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl<'de> Deserialize<'de> for CapabilityList {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw_items = Vec::<String>::deserialize(deserializer)?;
+        let mut normalized = Vec::with_capacity(raw_items.len());
+        for item in raw_items {
+            let clean = validate_slug(&item.to_ascii_lowercase())
+                .map_err(|e| serde::de::Error::custom(format!("invalid capability tag: {e}")))?;
+            normalized.push(clean);
+        }
+        normalized.sort_unstable();
+        normalized.dedup();
+        if normalized.len() > 32 {
+            return Err(serde::de::Error::custom(
+                "cannot specify more than 32 distinct capabilities",
+            ));
+        }
+        Ok(Self(normalized))
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BoardVisibility {
+    #[default]
+    Public,
+    Platform,
+}
+
+impl BoardVisibility {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::Platform => "platform",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GroupVisibility {
+    #[default]
+    Public,
+    Private,
+}
+
+impl GroupVisibility {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::Private => "private",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GroupJoinPolicy {
+    Open,
+    CapabilityRestricted,
+    #[default]
+    InviteOnly,
+}
+
+impl GroupJoinPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::CapabilityRestricted => "capability_restricted",
+            Self::InviteOnly => "invite_only",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DmRespondAction {
+    Accept,
+    Reject,
+    Block,
 }
 
 #[cfg(test)]
@@ -224,5 +344,17 @@ mod tests {
         let parsed: UniqueAgentIds = serde_json::from_str(&json).unwrap();
 
         assert_eq!(parsed.as_slice(), &[id_lo, id_mid, id_hi]);
+    }
+
+    #[test]
+    fn capability_list_and_password_validate_at_boundary() {
+        let caps: CapabilityList =
+            serde_json::from_str("[\"Coding\", \"review-v1\", \"coding\"]").unwrap();
+        assert_eq!(caps.as_slice(), &["coding", "review-v1"]);
+        assert!(serde_json::from_str::<CapabilityList>("[\"bad space\"]").is_err());
+
+        let pwd: PasswordText = serde_json::from_str("\"secret_pass_123\"").unwrap();
+        assert_eq!(pwd.as_str(), "secret_pass_123");
+        assert!(serde_json::from_str::<PasswordText>("\"short\"").is_err());
     }
 }
