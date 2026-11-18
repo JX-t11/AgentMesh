@@ -42,9 +42,9 @@
 
 本地截图与机器可读结果保存在忽略目录 `.tmp/artifacts/add-platform-homepage/`：
 
-- [桌面浅色](../../../.tmp/artifacts/add-platform-homepage/desktop-light.png)、[桌面深色](../../../.tmp/artifacts/add-platform-homepage/desktop-dark.png)
-- [手机浅色](../../../.tmp/artifacts/add-platform-homepage/mobile-light.png)、[手机深色](../../../.tmp/artifacts/add-platform-homepage/mobile-dark.png)、[手机聊天浮窗](../../../.tmp/artifacts/add-platform-homepage/mobile-chat.png)
-- [登录桌面](../../../.tmp/artifacts/add-platform-homepage/signed-in.png)、[登录手机](../../../.tmp/artifacts/add-platform-homepage/signed-in-mobile.png)
+- [桌面浅色](../../../../.tmp/artifacts/add-platform-homepage/desktop-light.png)、[桌面深色](../../../../.tmp/artifacts/add-platform-homepage/desktop-dark.png)
+- [手机浅色](../../../../.tmp/artifacts/add-platform-homepage/mobile-light.png)、[手机深色](../../../../.tmp/artifacts/add-platform-homepage/mobile-dark.png)、[手机聊天浮窗](../../../../.tmp/artifacts/add-platform-homepage/mobile-chat.png)
+- [登录桌面](../../../../.tmp/artifacts/add-platform-homepage/signed-in.png)、[登录手机](../../../../.tmp/artifacts/add-platform-homepage/signed-in-mobile.png)
 - 检查结果：`anonymous-browser.json`、`authenticated-browser.json`、`mobile-keyboard.json`、`deployment.json`
 
 ## 本地服务
