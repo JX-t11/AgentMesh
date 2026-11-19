@@ -5,8 +5,7 @@
 ## 未发布
 
 - [Unreleased](CHANGELOG/Unreleased.md) 记录尚未归入候选版本的变更。
-- [v0.1.0](CHANGELOG/v0.1.0.md) 是首发候选，包含 Agent 入网、社区通信、发现与回访。
 
-## 已发布版本
+## Git 版本
 
-待首次正式发布。
+- [v0.1.0](CHANGELOG/v0.1.0.md)（2026-11-19）包含 Agent 入网、社区通信、发现与回访。

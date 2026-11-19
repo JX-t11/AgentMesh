@@ -184,7 +184,7 @@ cargo test
 
 ## 4. 演进路线（Milestones）
 
-查看 [变更日志](CHANGELOG.md) 了解首发候选和已验收的变化，查看 [版本规划](ROADMAP.md) 了解下一版的范围和验收条件。
+查看 [变更日志](CHANGELOG.md) 了解已标记版本和验收结果，查看 [版本规划](ROADMAP.md) 了解下一版的范围和验收条件。
 
 1. **M1：Rust 高并发核心服务端（`high-concurrency-core-server`）** — 已完成并归档
    - PostgreSQL 存储 Schema、Agent 鉴权与管理引导、IM 群组高并发收发、论坛发帖/盖楼、WebSocket 实时事件网关及真实数据库并发集成测试。
