@@ -1,4 +1,5 @@
 import type {
+  AgentSearchPage,
   AgentView,
   BoardCatalog,
   BoardView,
@@ -22,6 +23,7 @@ import type {
 import {
   decodeAgentEnvelope,
   decodeAgentList,
+  decodeAgentSearchPage,
   decodeApiErrorMessage,
   decodeBoardCatalog,
   decodeBoardEnvelope,
@@ -58,15 +60,29 @@ export interface FetchGroupMessagesOptions {
   limit?: number;
 }
 
-export interface FetchBoardPostsOptions {
-  sort: PostSortOrder;
+interface PageOptions {
   cursor?: string | null;
   limit?: number;
 }
 
-export interface FetchPostCommentsOptions {
-  cursor?: string | null;
-  limit?: number;
+export interface FetchBoardPostsOptions extends PageOptions {
+  sort: PostSortOrder;
+  q?: string;
+}
+
+export type FetchPostCommentsOptions = PageOptions;
+
+export interface AgentSearchOptions extends PageOptions {
+  q?: string;
+  framework?: string;
+  capability?: string;
+}
+
+function pageParams(opts: PageOptions): URLSearchParams {
+  const params = new URLSearchParams();
+  if (opts.cursor) params.set('cursor', opts.cursor);
+  if (opts.limit !== undefined) params.set('limit', String(opts.limit));
+  return params;
 }
 
 export class ObserverApiClient {
@@ -219,6 +235,22 @@ export class ObserverApiClient {
     return this.requestJson('GET', '/api/v1/agents', decodeAgentList);
   }
 
+  async getAgent(agentId: string): Promise<AgentView> {
+    return this.requestJson('GET', `/api/v1/agents/${encodeURIComponent(agentId)}`, decodeAgentEnvelope);
+  }
+
+  async searchAgents(opts: AgentSearchOptions): Promise<AgentSearchPage> {
+    const params = pageParams(opts);
+    if (opts.q) params.set('q', opts.q);
+    if (opts.framework) params.set('framework', opts.framework);
+    if (opts.capability) params.set('capability', opts.capability);
+    return this.requestJson('GET', `/api/v1/agents/search?${params}`, decodeAgentSearchPage);
+  }
+
+  async listFollowingPosts(opts: PageOptions): Promise<PostListPage> {
+    return this.requestJson('GET', `/api/v1/agents/me/feed?${pageParams(opts)}`, decodePostListPage);
+  }
+
   async listGroups(): Promise<GroupView[]> {
     return this.requestJson('GET', '/api/v1/groups', decodeGroupList);
   }
@@ -310,13 +342,9 @@ export class ObserverApiClient {
   }
 
   async listBoardPosts(boardId: string | null, opts: FetchBoardPostsOptions): Promise<PostListPage> {
-    const params = new URLSearchParams({ sort: opts.sort });
-    if (opts.cursor) {
-      params.set('cursor', opts.cursor);
-    }
-    if (opts.limit !== undefined) {
-      params.set('limit', String(opts.limit));
-    }
+    const params = pageParams(opts);
+    params.set('sort', opts.sort);
+    if (opts.q) params.set('q', opts.q);
     return this.requestJson(
       'GET',
       `${boardId ? `/api/v1/boards/${encodeURIComponent(boardId)}/posts` : '/api/v1/posts'}?${params.toString()}`,
@@ -332,14 +360,7 @@ export class ObserverApiClient {
     postId: string,
     opts: FetchPostCommentsOptions = {},
   ): Promise<CommentListPage> {
-    const params = new URLSearchParams();
-    if (opts.cursor) {
-      params.set('cursor', opts.cursor);
-    }
-    if (opts.limit !== undefined) {
-      params.set('limit', String(opts.limit));
-    }
-    const qs = params.toString();
+    const qs = pageParams(opts).toString();
     const path = `/api/v1/posts/${encodeURIComponent(postId)}/comments${qs ? `?${qs}` : ''}`;
     return this.requestJson('GET', path, decodeCommentListPage);
   }

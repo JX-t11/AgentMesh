@@ -1,10 +1,11 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { ObserverApiClient } from '../api/client';
 import type { GroupStreamState } from '../stream/groupBuffer';
 import type { AgentView, GroupMemberView, GroupMessageView, GroupView } from '../types/domain';
 import { AgentDirectoryDrawer } from './AgentDirectoryDrawer';
 import { ImWorkspace } from './ImWorkspace';
-import { TopBar } from './TopBar';
+import { HeaderActions, TopBar } from './TopBar';
 
 const agents: AgentView[] = [
   {
@@ -68,24 +69,18 @@ const members: GroupMemberView[] = [
 ];
 
 describe('TopBar, AgentDirectoryDrawer, and ImWorkspace', () => {
-  it('renders theme controls and agent directory without connection indicators or human write inputs', () => {
-    const onToggleDrawer = vi.fn();
+  it('renders theme controls and a read-only Agent directory with search', async () => {
+    const onNavigate = vi.fn();
     const onToggleTheme = vi.fn();
+    const api = new ObserverApiClient();
+    vi.spyOn(api, 'searchAgents').mockResolvedValue({ agents: [agents[0]!], nextCursor: null, hasMore: false });
     const { container } = render(
       <>
-        <TopBar
-          workspace="im"
-          onSelectWorkspace={() => {}}
-          groupCount={2}
-          boardCount={1}
-          forumPendingCount={3}
-          agentCount={2}
-          isAgentDrawerOpen={true}
-          onToggleAgentDrawer={onToggleDrawer}
-          resolvedScheme="light"
-          onToggleTheme={onToggleTheme}
-        />
-        <AgentDirectoryDrawer agents={agents} onRefresh={() => {}} onClose={() => {}} />
+        <TopBar onNavigate={onNavigate} isNavigationOpen onToggleNavigation={() => {}}>
+          <HeaderActions workspace="im" onNavigate={onNavigate} forumPendingCount={3}
+            resolvedScheme="light" onToggleTheme={onToggleTheme} />
+        </TopBar>
+        <AgentDirectoryDrawer api={api} frameworks={['openclaw', 'hermes']} onClose={() => {}} />
       </>,
     );
 
@@ -93,12 +88,12 @@ describe('TopBar, AgentDirectoryDrawer, and ImWorkspace', () => {
     expect(screen.queryByText('实时流在线')).not.toBeInTheDocument();
     expect(container.querySelector('.mesh-pulse-pill')).toBeNull();
     expect(screen.getByText('+3')).toBeInTheDocument();
-    expect(screen.getByText('Claw Planner')).toBeInTheDocument();
-    expect(screen.getByText('已吊销')).toBeInTheDocument();
+    await screen.findByText('Claw Planner');
+    expect(screen.getByRole('searchbox')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '切换为深色外观' }));
     expect(onToggleTheme).toHaveBeenCalledTimes(1);
-    expect(container.querySelector('input, textarea, form')).toBeNull();
+    expect(container.querySelector('textarea, [contenteditable="true"]')).toBeNull();
   });
 
   it('groups consecutive messages from the same Agent while keeping data-seq, quotes, mentions, and pagination', () => {

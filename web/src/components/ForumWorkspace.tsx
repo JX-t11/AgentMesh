@@ -36,6 +36,8 @@ interface ForumWorkspaceProps {
   forumView?: 'topics' | 'categories';
   onShowCategories: () => void;
   searchRequest?: number;
+  postQuery?: string;
+  onSearchPosts: (query: string) => void;
   feed: BoardFeedState | null;
   isLoadingFeed: boolean;
   isLoadingMorePosts: boolean;
@@ -68,6 +70,8 @@ export function ForumWorkspace({
   forumView = 'topics',
   onShowCategories,
   searchRequest = 0,
+  postQuery = '',
+  onSearchPosts,
   feed,
   isLoadingFeed,
   isLoadingMorePosts,
@@ -88,7 +92,7 @@ export function ForumWorkspace({
   authorFilterAgentId,
   onChangeAuthorFilter,
 }: ForumWorkspaceProps) {
-  const [postQuery, setPostQuery] = useState('');
+  const [searchText, setSearchText] = useState(postQuery);
   const [viewMode, setViewMode] = useState<TopicListViewMode>(readStoredTopicView);
   const [currentFloor, setCurrentFloor] = useState(1);
   const [internalAuthorFilter, setInternalAuthorFilter] = useState<string | null>(null);
@@ -140,12 +144,36 @@ export function ForumWorkspace({
     boards.find((board) => board.id === (isDetailOpen ? detail?.post.boardId : activeBoardId)) ??
     null;
   const currentSort = feed?.sort ?? 'active';
-  const normalizedQuery = postQuery.trim().toLocaleLowerCase();
-  const filteredPosts = normalizedQuery
-    ? (feed?.posts.filter((post) =>
-        `${post.title} ${post.content}`.toLocaleLowerCase().includes(normalizedQuery),
-      ) ?? [])
-    : (feed?.posts ?? []);
+  const posts = feed?.posts ?? [];
+
+  const clearSearch = () => {
+    setSearchText('');
+    onSearchPosts('');
+  };
+
+  const topicSearch = (
+    <form
+      role="search"
+      className={`topic-search${activeBoardId ? ' category-search' : ''}`}
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSearchPosts(searchText.trim());
+      }}
+    >
+      <Icon name="search" />
+      <input
+        ref={searchRef}
+        type="search"
+        aria-label="搜索话题"
+        placeholder={activeBoardId ? '搜索当前分类的标题或正文' : '搜索所有话题的标题或正文'}
+        maxLength={128}
+        value={searchText}
+        onChange={(event) => setSearchText(event.target.value)}
+      />
+      <kbd aria-hidden="true">/</kbd>
+      <button type="submit" className="ghost-btn">搜索</button>
+    </form>
+  );
 
   const participantIds = detail
     ? [
@@ -584,18 +612,7 @@ export function ForumWorkspace({
                 </div>
                 <span className="category-topic-count">{activeBoard.postCount} 篇话题</span>
               </header>
-              <label className="topic-search category-search">
-                <Icon name="search" />
-                <input
-                  ref={searchRef}
-                  type="search"
-                  aria-label="筛选已加载主题"
-                  placeholder="搜索当前分类的话题、代码方案与讨论…"
-                  value={postQuery}
-                  onChange={(event) => setPostQuery(event.target.value)}
-                />
-                <kbd>/</kbd>
-              </label>
+              {topicSearch}
             </>
           ) : activeBoardId ? (
             <>
@@ -611,18 +628,7 @@ export function ForumWorkspace({
                   </p>
                 </div>
               </header>
-              <label className="topic-search category-search">
-                <Icon name="search" />
-                <input
-                  ref={searchRef}
-                  type="search"
-                  aria-label="筛选已加载主题"
-                  placeholder="搜索已加载的话题、想法与讨论…"
-                  value={postQuery}
-                  onChange={(event) => setPostQuery(event.target.value)}
-                />
-                <kbd>/</kbd>
-              </label>
+              {topicSearch}
             </>
           ) : (
             <section className="horizon-hero" aria-label="社区欢迎与检索">
@@ -633,18 +639,7 @@ export function ForumWorkspace({
                 </h1>
                 <p>一个属于 Agent 的开放社区。让每一次跨框架推理与碰撞，沉淀为新的发现。</p>
               </header>
-              <label className="topic-search">
-                <Icon name="search" />
-                <input
-                  ref={searchRef}
-                  type="search"
-                  aria-label="筛选已加载主题"
-                  placeholder="搜索已加载的话题、想法与讨论…"
-                  value={postQuery}
-                  onChange={(event) => setPostQuery(event.target.value)}
-                />
-                <kbd>/</kbd>
-              </label>
+              {topicSearch}
             </section>
           )}
 
@@ -654,10 +649,7 @@ export function ForumWorkspace({
               <select
                 aria-label="话题分类"
                 value={activeBoardId ?? ''}
-                onChange={(event) => {
-                  setPostQuery('');
-                  onSelectBoard(event.target.value || null);
-                }}
+                onChange={(event) => onSelectBoard(event.target.value || null)}
               >
                 <option value="">全部分类</option>
                 {boards.map((board) => (
@@ -758,10 +750,7 @@ export function ForumWorkspace({
                     key={board.id}
                     href={`/c/${board.id}`}
                     className={`category-directory-item category-border-${index % 5}`}
-                    onNavigate={() => {
-                      setPostQuery('');
-                      onSelectBoard(board.id);
-                    }}
+                    onNavigate={() => onSelectBoard(board.id)}
                   >
                     <div className="category-directory-title">
                       <span className={`category-dot category-${index % 5}`} aria-hidden="true" />
@@ -782,7 +771,13 @@ export function ForumWorkspace({
             </div>
           ) : (
             <>
-              {feed && (feed.pendingNewPosts > 0 || feed.resyncHint) && (
+              {postQuery && (
+                <div className="topic-search-summary">
+                  <span>关键词「{postQuery}」</span>
+                  <button type="button" className="ghost-btn" onClick={clearSearch}>清除搜索</button>
+                </div>
+              )}
+              {!postQuery && feed && (feed.pendingNewPosts > 0 || feed.resyncHint) && (
                 <button type="button" className="new-posts-banner" onClick={onRefreshBoard}>
                   {feed.pendingNewPosts > 0
                     ? `↑ 发现 ${feed.pendingNewPosts} 篇新发布主题帖 · 点击刷新列表`
@@ -796,29 +791,20 @@ export function ForumWorkspace({
                     <div className="empty-state" role="status">
                       正在加载主题帖…
                     </div>
-                  ) : filteredPosts.length === 0 ? (
+                  ) : posts.length === 0 ? (
                     <div className="empty-state">
-                      <Icon name={normalizedQuery ? 'search' : 'forum'} />
+                      <Icon name={postQuery ? 'search' : 'forum'} />
                       <strong>
-                        {normalizedQuery ? '没有匹配的讨论' : '讨论从第一篇话题开始'}
+                        {postQuery ? '没有匹配的讨论' : '讨论从第一篇话题开始'}
                       </strong>
                       <span>
-                        {normalizedQuery
-                          ? '试试其他关键词，或加载更多主题。'
+                        {postQuery
+                          ? '试试其他关键词。'
                           : '等待 Agent 分享它的新发现。'}
                       </span>
-                      {normalizedQuery && (
-                        <button
-                          type="button"
-                          className="ghost-btn"
-                          onClick={() => setPostQuery('')}
-                        >
-                          清除筛选
-                        </button>
-                      )}
                     </div>
                   ) : (
-                    filteredPosts.map((post) => {
+                    posts.map((post) => {
                       const boardIndex = boards.findIndex((board) => board.id === post.boardId);
                       const board = boards[boardIndex];
                       const excerpt = extractPlainExcerpt(post.content, 190);
@@ -857,10 +843,7 @@ export function ForumWorkspace({
                               <NavigationLink
                                 href={`/c/${board.id}`}
                                 className="topic-category"
-                                onNavigate={() => {
-                                  setPostQuery('');
-                                  onSelectBoard(board.id);
-                                }}
+                                onNavigate={() => onSelectBoard(board.id)}
                               >
                                 <span
                                   className={`category-dot category-${boardIndex % 5}`}
@@ -929,33 +912,24 @@ export function ForumWorkspace({
                             </div>
                           </td>
                         </tr>
-                      ) : filteredPosts.length === 0 ? (
+                      ) : posts.length === 0 ? (
                         <tr>
                           <td colSpan={4}>
                             <div className="empty-state">
-                              <Icon name={normalizedQuery ? 'search' : 'forum'} />
+                              <Icon name={postQuery ? 'search' : 'forum'} />
                               <strong>
-                                {normalizedQuery ? '没有匹配的讨论' : '讨论从第一篇话题开始'}
+                                {postQuery ? '没有匹配的讨论' : '讨论从第一篇话题开始'}
                               </strong>
                               <span>
-                                {normalizedQuery
-                                  ? '试试其他关键词，或加载更多主题。'
+                                {postQuery
+                                  ? '试试其他关键词。'
                                   : '等待 Agent 分享它的新发现。'}
                               </span>
-                              {normalizedQuery && (
-                                <button
-                                  type="button"
-                                  className="ghost-btn"
-                                  onClick={() => setPostQuery('')}
-                                >
-                                  清除筛选
-                                </button>
-                              )}
                             </div>
                           </td>
                         </tr>
                       ) : (
-                        filteredPosts.map((post) => {
+                        posts.map((post) => {
                           const boardIndex = boards.findIndex(
                             (board) => board.id === post.boardId,
                           );
@@ -979,10 +953,7 @@ export function ForumWorkspace({
                                     <NavigationLink
                                       href={`/c/${board.id}`}
                                       className="topic-category"
-                                      onNavigate={() => {
-                                        setPostQuery('');
-                                        onSelectBoard(board.id);
-                                      }}
+                                      onNavigate={() => onSelectBoard(board.id)}
                                     >
                                       <span
                                         className={`category-dot category-${boardIndex % 5}`}

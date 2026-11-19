@@ -4,7 +4,7 @@ use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sqlx::FromRow;
+use sqlx::{FromRow, Postgres, QueryBuilder};
 use uuid::Uuid;
 
 use crate::auth::{AgentAuth, AgentOrOwnerAuth};
@@ -536,69 +536,68 @@ pub async fn unblock_agent_dm(
     Ok(StatusCode::NO_CONTENT)
 }
 
+const DM_REQUESTS_SELECT: &str =
+    "SELECT r.id, r.sender_agent_id, sa.slug AS sender_slug, sa.display_name AS sender_display_name,
+            r.receiver_agent_id, ra.slug AS receiver_slug, ra.display_name AS receiver_display_name,
+            r.status, r.request_message, r.dm_group_id, r.created_at, r.updated_at
+     FROM dm_requests r
+     JOIN agents sa ON sa.id = r.sender_agent_id
+     JOIN agents ra ON ra.id = r.receiver_agent_id";
+
 pub async fn list_dm_requests(
     caller: AgentOrOwnerAuth,
     State(state): State<AppState>,
     AppQuery(query): AppQuery<ListDmRequestsQuery>,
 ) -> Result<Json<DmRequestListResponse>, AppError> {
-    let status_filter = query.status.as_deref();
-
-    let requests = match caller {
+    let mut statement = QueryBuilder::<Postgres>::new(DM_REQUESTS_SELECT);
+    match caller {
         AgentOrOwnerAuth::Admin => {
-            sqlx::query_as::<_, DmRequestView>(
-                "SELECT r.id, r.sender_agent_id, sa.slug AS sender_slug, sa.display_name AS sender_display_name,
-                        r.receiver_agent_id, ra.slug AS receiver_slug, ra.display_name AS receiver_display_name,
-                        r.status, r.request_message, r.dm_group_id, r.created_at, r.updated_at
-                 FROM dm_requests r
-                 JOIN agents sa ON sa.id = r.sender_agent_id
-                 JOIN agents ra ON ra.id = r.receiver_agent_id
-                 WHERE ($1::text IS NULL OR r.status = $1)
-                 ORDER BY r.created_at DESC, r.id DESC
-                 LIMIT 100",
-            )
-            .bind(status_filter)
-            .fetch_all(&state.db)
-            .await?
+            statement.push(" WHERE TRUE");
         }
         AgentOrOwnerAuth::Agent(agent) => {
-            sqlx::query_as::<_, DmRequestView>(
-                "SELECT r.id, r.sender_agent_id, sa.slug AS sender_slug, sa.display_name AS sender_display_name,
-                        r.receiver_agent_id, ra.slug AS receiver_slug, ra.display_name AS receiver_display_name,
-                        r.status, r.request_message, r.dm_group_id, r.created_at, r.updated_at
-                 FROM dm_requests r
-                 JOIN agents sa ON sa.id = r.sender_agent_id
-                 JOIN agents ra ON ra.id = r.receiver_agent_id
-                 WHERE (r.sender_agent_id = $1 OR r.receiver_agent_id = $1)
-                   AND ($2::text IS NULL OR r.status = $2)
-                 ORDER BY r.created_at DESC, r.id DESC
-                 LIMIT 100",
-            )
-            .bind(agent.id)
-            .bind(status_filter)
-            .fetch_all(&state.db)
-            .await?
+            statement
+                .push(" WHERE (r.sender_agent_id = ")
+                .push_bind(agent.id)
+                .push(" OR r.receiver_agent_id = ")
+                .push_bind(agent.id)
+                .push(")");
         }
         AgentOrOwnerAuth::User(user) => {
-            sqlx::query_as::<_, DmRequestView>(
-                "SELECT r.id, r.sender_agent_id, sa.slug AS sender_slug, sa.display_name AS sender_display_name,
-                        r.receiver_agent_id, ra.slug AS receiver_slug, ra.display_name AS receiver_display_name,
-                        r.status, r.request_message, r.dm_group_id, r.created_at, r.updated_at
-                 FROM dm_requests r
-                 JOIN agents sa ON sa.id = r.sender_agent_id
-                 JOIN agents ra ON ra.id = r.receiver_agent_id
-                 WHERE (sa.owner_user_id = $1 OR ra.owner_user_id = $1)
-                   AND ($2::text IS NULL OR r.status = $2)
-                 ORDER BY r.created_at DESC, r.id DESC
-                 LIMIT 100",
-            )
-            .bind(user.id)
-            .bind(status_filter)
-            .fetch_all(&state.db)
-            .await?
+            statement
+                .push(" WHERE (sa.owner_user_id = ")
+                .push_bind(user.id)
+                .push(" OR ra.owner_user_id = ")
+                .push_bind(user.id)
+                .push(")");
         }
-    };
-
+    }
+    if let Some(status) = query.status {
+        statement.push(" AND r.status = ").push_bind(status);
+    }
+    statement.push(" ORDER BY r.created_at DESC, r.id DESC LIMIT 100");
+    let requests = statement
+        .build_query_as::<DmRequestView>()
+        .fetch_all(&state.db)
+        .await?;
     Ok(Json(DmRequestListResponse { requests }))
+}
+
+pub(super) async fn list_pending_incoming_requests(
+    state: &AppState,
+    agent_id: Uuid,
+    limit: i64,
+) -> Result<Vec<DmRequestView>, AppError> {
+    let mut statement = QueryBuilder::<Postgres>::new(DM_REQUESTS_SELECT);
+    statement
+        .push(" WHERE r.status = 'pending' AND r.receiver_agent_id = ")
+        .push_bind(agent_id)
+        .push(" ORDER BY r.created_at DESC, r.id DESC LIMIT ")
+        .push_bind(limit);
+    let requests = statement
+        .build_query_as::<DmRequestView>()
+        .fetch_all(&state.db)
+        .await?;
+    Ok(requests)
 }
 
 pub async fn list_dm_sessions(

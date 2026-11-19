@@ -1,4 +1,5 @@
 use agentmesh_server::db::{connect_and_migrate, MIGRATOR};
+use sqlx::migrate::Migrate;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -9,7 +10,7 @@ fn base_database_url() -> String {
 }
 
 #[tokio::test]
-async fn migrations_are_idempotent_and_create_expected_tables() {
+async fn migrations_preserve_existing_data_and_are_idempotent() {
     let base_url = base_database_url();
     let admin_pool = PgPool::connect(&base_url).await.expect("connect base pg");
 
@@ -20,9 +21,11 @@ async fn migrations_are_idempotent_and_create_expected_tables() {
         .expect("create temp db");
 
     let test_url = replace_db_name(&base_url, &db_name);
+    seed_forum_on_version_four(&test_url).await;
+
     let pool = connect_and_migrate(&test_url, 5)
         .await
-        .expect("first migrate");
+        .expect("upgrade existing database");
 
     // 再次执行验证幂等性
     MIGRATOR
@@ -40,7 +43,9 @@ async fn migrations_are_idempotent_and_create_expected_tables() {
     assert_eq!(
         tables,
         vec![
+            "agent_board_subscriptions",
             "agent_dm_blocks",
+            "agent_follows",
             "agents",
             "boards",
             "comments",
@@ -68,11 +73,70 @@ async fn migrations_are_idempotent_and_create_expected_tables() {
     .expect("query creator_agent_id column");
     assert!(has_creator_agent_col);
 
+    let post: (String, String, String, String) = sqlx::query_as(
+        "SELECT agents.slug, boards.slug, posts.title, posts.content
+         FROM posts
+         JOIN agents ON agents.id = posts.author_agent_id
+         JOIN boards ON boards.id = posts.board_id",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("read existing post after upgrade");
+    assert_eq!(
+        post,
+        (
+            "existing-agent".into(),
+            "existing-board".into(),
+            "Existing topic".into(),
+            "Discussion before social discovery".into(),
+        )
+    );
+
     pool.close().await;
     sqlx::query(&format!("DROP DATABASE {db_name} WITH (FORCE)"))
         .execute(&admin_pool)
         .await
         .expect("drop temp db");
+}
+
+async fn seed_forum_on_version_four(database_url: &str) {
+    use sqlx::Connection;
+
+    let mut connection = sqlx::PgConnection::connect(database_url)
+        .await
+        .expect("connect to empty database");
+    connection
+        .ensure_migrations_table()
+        .await
+        .expect("create migrations table");
+    for migration in MIGRATOR
+        .iter()
+        .take_while(|migration| migration.version <= 4)
+    {
+        connection
+            .apply(migration)
+            .await
+            .expect("apply old migration");
+    }
+
+    sqlx::query(
+        "WITH author AS (
+             INSERT INTO agents (id, slug, display_name, framework)
+             VALUES (gen_random_uuid(), 'existing-agent', 'Existing Agent', 'hermes')
+             RETURNING id
+         ), board AS (
+             INSERT INTO boards (id, slug, name)
+             VALUES (gen_random_uuid(), 'existing-board', 'Existing board')
+             RETURNING id
+         )
+         INSERT INTO posts (id, board_id, author_agent_id, client_req_id, payload_hash, title, content)
+         SELECT gen_random_uuid(), board.id, author.id, 'existing-request', decode('00', 'hex'),
+                'Existing topic', 'Discussion before social discovery'
+         FROM author CROSS JOIN board",
+    )
+    .execute(&mut connection)
+    .await
+    .expect("seed existing forum data");
 }
 
 fn replace_db_name(url: &str, new_db: &str) -> String {

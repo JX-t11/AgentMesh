@@ -2,9 +2,12 @@ target/
 .git/
 web/node_modules/
 web/dist/
+web/public/downloads/
+web/public/connect/
 integrations/openclaw-agentmesh/node_modules/
 integrations/openclaw-agentmesh/dist/
 .data/
+.tmp/
 *.tsbuildinfo
 .env
 .env.*

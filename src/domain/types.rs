@@ -130,6 +130,8 @@ impl Default for PageLimit {
 }
 
 impl PageLimit {
+    pub(crate) const PREVIEW: Self = Self(6);
+
     pub fn get(self) -> i64 {
         self.0
     }

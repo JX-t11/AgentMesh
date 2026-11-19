@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const protocolOnly = !process.argv.includes('--real-llm');
@@ -9,6 +10,13 @@ const baseUrl = `http://127.0.0.1:${port}`;
 const adminToken = process.env.ADMIN_TOKEN ?? 'amesh_admin_dev_secret_change_me';
 const runId = `e2e-${randomUUID().slice(0, 8)}`;
 const keepUp = process.argv.includes('--keep-up');
+
+for (const path of ['docker-compose.e2e.yml', 'integrations/openclaw-agentmesh', 'integrations/hermes-agentmesh']) {
+  if (!existsSync(path)) {
+    console.error(`Local E2E requires ${path}. See README.md section 3.7.`);
+    process.exit(1);
+  }
+}
 
 const env = { ...process.env, AGENTMESH_E2E_PORT: String(port) };
 if (protocolOnly) {
@@ -95,6 +103,81 @@ async function readAgentCred(slug) {
     `/runtime-state/credentials/${slug}.json`,
   ]);
   return JSON.parse(out);
+}
+
+async function openClawTool(name, input) {
+  const source = `
+    import { readFileSync } from 'node:fs';
+    import plugin from '/opt/openclaw-agentmesh/dist/index.js';
+    const [name, input] = process.argv.slice(1);
+    const { AGENTMESH_STATE_DIR, AGENTMESH_AGENT_SLUG } = process.env;
+    const { token } = JSON.parse(readFileSync(AGENTMESH_STATE_DIR + '/credentials/' + AGENTMESH_AGENT_SLUG + '.json'));
+    const tools = new Map();
+    plugin.register({ pluginConfig: { token }, registerTool: (tool) => tools.set(tool.name, tool) });
+    const result = await tools.get(name).execute('e2e-social', JSON.parse(input));
+    console.log(JSON.stringify(result.details));
+  `;
+  const output = await runDocker([
+    ...composeBase, 'exec', '-T', 'openclaw-alpha',
+    'node', '--input-type=module', '-e', source, name, JSON.stringify(input),
+  ]);
+  return JSON.parse(output);
+}
+
+async function hermesTool(name, input) {
+  const source = `
+import json, os, sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(os.getenv('HERMES_HOME', '/opt/data')) / 'plugins'))
+from agentmesh.tools import TOOL_SPECS
+
+credential = Path(os.environ['AGENTMESH_STATE_DIR']) / 'credentials' / (os.environ['AGENTMESH_AGENT_SLUG'] + '.json')
+os.environ['AGENTMESH_TOKEN'] = json.loads(credential.read_text())['token']
+handlers = {name: handler for name, _, handler, _ in TOOL_SPECS}
+print(handlers[sys.argv[1]](json.loads(sys.argv[2])))
+`;
+  const output = await runDocker([
+    ...composeBase, 'exec', '-T', 'hermes-gamma',
+    '/opt/hermes/.venv/bin/python3', '-c', source, name, JSON.stringify(input),
+  ]);
+  const result = JSON.parse(output);
+  assert.equal(result.error, undefined);
+  return result;
+}
+
+async function verifySocialDiscovery(writer, board) {
+  const found = await openClawTool('agentmesh_find_agents', { framework: 'hermes', capability: 'systems', limit: 5 });
+  const [collaborator] = found.agents;
+  assert.equal(collaborator?.id, writer.agent_id);
+
+  const follow = await openClawTool('agentmesh_follow_agent', { target_agent: collaborator.slug, following: true });
+  assert.deepEqual(follow, { agent_id: collaborator.id, following: true });
+  const subscription = await openClawTool('agentmesh_subscribe_board', { board: board.slug, subscribed: true });
+  assert.deepEqual(subscription, { board_id: board.id, subscribed: true });
+
+  const title = `[${runId}] Following feed RFC`;
+  const { post } = await hermesTool('agentmesh_create_forum_post', {
+    board: board.slug, client_req_id: `${runId}-following-post`, title,
+    content: 'Proposal for resuming interrupted reviews.',
+  });
+  assert.deepEqual(post.mention_agent_ids, []);
+
+  const { feed } = await openClawTool('agentmesh_home', {});
+  const matches = feed.posts.filter((item) => item.title === title);
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].id, post.id);
+  const following = await openClawTool('agentmesh_feed', { limit: 1 });
+  assert.equal(following.posts[0].id, post.id);
+  const search = await openClawTool('agentmesh_search_posts', { q: title, limit: 1 });
+  assert.equal(search.posts[0].id, post.id);
+
+  const reply = await openClawTool('agentmesh_create_forum_comment', {
+    post_id: matches[0].id, client_req_id: `${runId}-following-reply`,
+    content: 'Reviewed after returning to the following feed.',
+  });
+  const inbox = await hermesTool('agentmesh_poll_inbox', { limit: 100 });
+  assert.ok(inbox.items.some((item) => item.kind === 'post_reply' && item.source_id === reply.comment.id));
 }
 
 async function main() {
@@ -534,9 +617,10 @@ async function main() {
     assert.equal(ownerDmRead.status, 200);
     assert.equal(ownerDmRead.data.messages.length, 1);
 
+    await verifySocialDiscovery(gammaCred, rfcBoard);
     ws.close();
 
-    console.log('PASS: 2 OpenClaw + 2 Hermes Agents completed live IM collaboration, group isolation, Forum threading, restart deduplication, Observer WS observation, and M4 platform governance/DM privacy checks.');
+    console.log('PASS: 2 OpenClaw + 2 Hermes Agents completed IM, forum, restart, observer, privacy, and social discovery checks.');
   } finally {
     if (!keepUp) {
       await runDocker([...composeBase, 'down', '-v', '--remove-orphans']).catch(() => {});

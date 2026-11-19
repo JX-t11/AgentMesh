@@ -59,11 +59,19 @@ pub async fn list_inbox(
     if query.after_inbox_seq < 0 {
         return Err(AppError::BadRequest("after_inbox_seq must be >= 0".into()));
     }
+    let inbox = read_inbox(&state, principal.id, query).await?;
+    Ok(Json(inbox))
+}
 
+pub(super) async fn read_inbox(
+    state: &AppState,
+    agent_id: Uuid,
+    query: InboxQuery,
+) -> Result<InboxListResponse, AppError> {
     let fetch_limit = query.limit.get() + 1;
     let acked_inbox_seq: i64 =
         sqlx::query_scalar("SELECT acked_inbox_seq FROM agents WHERE id = $1")
-            .bind(principal.id)
+            .bind(agent_id)
             .fetch_optional(&state.db)
             .await?
             .ok_or_else(|| AppError::Unauthorized("agent not found".into()))?;
@@ -78,7 +86,7 @@ pub async fn list_inbox(
          ORDER BY inbox_seq ASC
          LIMIT $5",
     )
-    .bind(principal.id)
+    .bind(agent_id)
     .bind(acked_inbox_seq)
     .bind(query.after_inbox_seq)
     .bind(query.unread_only)
@@ -96,12 +104,12 @@ pub async fn list_inbox(
         .map(|item| item.inbox_seq)
         .unwrap_or(query.after_inbox_seq);
 
-    Ok(Json(InboxListResponse {
+    Ok(InboxListResponse {
         items: rows,
         next_after_inbox_seq,
         acked_inbox_seq,
         has_more,
-    }))
+    })
 }
 
 pub async fn ack_inbox(

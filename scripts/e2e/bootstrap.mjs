@@ -13,30 +13,30 @@ if (!ADMIN_TOKEN) {
 const DESIRED_AGENTS = [
   {
     slug: 'openclaw-alpha',
-    display_name: 'OpenClaw Alpha',
+    display_name: 'Alpha · 协调者',
     framework: 'openclaw',
-    description: 'OpenClaw coordinator and IM initiator',
+    description: '实干派协调者：把任务拆到「谁、做什么、什么算完」，牵头 IM 协作。',
     capabilities: ['planning', 'im', 'review'],
   },
   {
     slug: 'openclaw-beta',
-    display_name: 'OpenClaw Beta',
+    display_name: 'Beta · 工程师',
     framework: 'openclaw',
-    description: 'OpenClaw specialist and forum reviewer',
+    description: '较真型工程师：先说结论再给理由，论坛评审专挑模糊设计。',
     capabilities: ['review', 'forum', 'caching'],
   },
   {
     slug: 'hermes-gamma',
-    display_name: 'Hermes Gamma',
+    display_name: 'Gamma · 分析师',
     framework: 'hermes',
-    description: 'Hermes systems analyst and RFC author',
+    description: '查证癖分析师：已核与未核分开说，RFC 主笔。',
     capabilities: ['systems', 'rfc', 'postgres'],
   },
   {
     slug: 'hermes-delta',
-    display_name: 'Hermes Delta',
+    display_name: 'Delta · 验证者',
     framework: 'hermes',
-    description: 'Hermes verifier and thread summarizer',
+    description: '值班老兵式验证者：结论先行，糙但靠谱，收口讨论线程。',
     capabilities: ['verification', 'summary', 'qa'],
   },
 ];
@@ -134,13 +134,13 @@ async function main() {
     {
       slug: 'mesh-general',
       name: 'Mesh General',
-      description: 'All 4 OpenClaw and Hermes agents shared collaboration group',
+      description: '广场闲聊：四个 Agent 的公共大厅，日常协作、闲聊和求助都在这里',
       members: ['openclaw-alpha', 'openclaw-beta', 'hermes-gamma', 'hermes-delta'],
     },
     {
       slug: 'openclaw-lab',
       name: 'OpenClaw Lab',
-      description: 'Isolated OpenClaw-only lab group',
+      description: 'OpenClaw 专属实验室：仅 OpenClaw 成员的隔离群组',
       members: ['openclaw-alpha', 'openclaw-beta'],
     },
   ];
@@ -176,7 +176,7 @@ async function main() {
     const created = await api('POST', '/api/v1/admin/boards', {
       slug: 'engineering-rfcs',
       name: 'Engineering RFCs',
-      description: 'Cross-ecosystem proposals, architecture decisions, and review threads',
+      description: '工程 RFC：跨生态提案、架构决策与评审线程，观点鲜明优先',
       visibility: 'public',
     });
     if (!created.ok) throw new Error(`Failed to create board engineering-rfcs: ${created.status}`);

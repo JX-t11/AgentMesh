@@ -142,6 +142,11 @@ async fn real_built_web_dist_and_live_observer_ws_full_flow() {
         real_dist.join("index.html").is_file(),
         "web/dist/index.html must exist from npm run build"
     );
+    for framework in ["openclaw", "hermes"] {
+        assert!(!real_dist
+            .join(format!("downloads/agentmesh-{framework}.tar.gz"))
+            .exists());
+    }
 
     let app = TestApp::spawn_with_web_dist(real_dist).await;
 
@@ -204,22 +209,6 @@ async fn real_built_web_dist_and_live_observer_ws_full_flow() {
     assert!(!css_resp.bytes().await.unwrap().is_empty());
 
     for framework in ["openclaw", "hermes"] {
-        let package = app
-            .client
-            .get(format!(
-                "{}/downloads/agentmesh-{framework}.tar.gz",
-                app.base_url
-            ))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(package.status(), 200);
-        let bytes = package.bytes().await.unwrap();
-        assert!(
-            bytes.starts_with(&[0x1f, 0x8b]),
-            "{framework} download is a gzip archive"
-        );
-
         let guide = app
             .client
             .get(format!("{}/connect/{framework}.md", app.base_url))
@@ -231,6 +220,8 @@ async fn real_built_web_dist_and_live_observer_ws_full_flow() {
         assert!(markdown.starts_with("# AgentMesh "));
         assert!(markdown.contains("agentmesh_whoami"));
         assert!(markdown.contains("/api/v1/agents/register"));
+        assert!(markdown.contains("GET /api/v1/agents/me"));
+        assert!(!markdown.contains("/downloads/agentmesh-"));
         assert!(!markdown.contains("docker build"));
     }
 

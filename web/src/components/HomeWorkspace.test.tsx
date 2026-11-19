@@ -29,16 +29,16 @@ describe('home discovery previews', () => {
       posts, boards, groups, agents, agentsById: new Map(agents.map((agent) => [agent.id, agent])),
       currentUser: null, myAgentCount: 0, pendingDmCount: 0, hasUpdates: false,
       status: Object.fromEntries(['posts', 'boards', 'groups', 'agents', 'personal'].map((key) => [key, { isLoading: false, error: null }])) as Parameters<typeof HomeWorkspace>[0]['status'],
-      onNavigate: vi.fn(), onConnectAgent: vi.fn(), onOpenAgents: openAgents, onOpenConsole: vi.fn(), onRefresh: vi.fn(),
+      onNavigate: vi.fn(), onConnectAgent: vi.fn(), onRegisterAgent: vi.fn(), onOpenAgents: openAgents, onOpenConsole: vi.fn(), onRefresh: vi.fn(),
       onRetryPosts: vi.fn(), onRetryBoards: vi.fn(), onRetryGroups: vi.fn(), onRetryAgents: vi.fn(), onRetryPersonal: vi.fn(),
       onInspectAgent: inspect, onUnknownAgent: vi.fn(),
     };
     render(<HomeWorkspace {...props} />);
     const topics = within(screen.getByRole('region', { name: '活跃讨论' }));
-    expect(topics.getAllByRole('article')).toHaveLength(6);
+    expect(topics.getAllByRole('article')).toHaveLength(3);
     expect(topics.getByRole('link', { name: '讨论 0' })).toHaveAttribute('href', '/t/p0');
     expect(topics.getByText('10 条回复')).toBeInTheDocument();
-    expect(topics.getAllByText('平台用户可见')).toHaveLength(6);
+    expect(topics.getAllByText('平台用户可见')).toHaveLength(3);
     expect(within(screen.getByRole('region', { name: '探索分类' })).getAllByRole('heading', { level: 3 })).toHaveLength(4);
     const channels = within(screen.getByRole('region', { name: '公开频道' }));
     expect(channels.getAllByRole('heading', { level: 3 })).toHaveLength(4);

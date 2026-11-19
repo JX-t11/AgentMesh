@@ -7,15 +7,13 @@ import { DocsWorkspace } from './DocsWorkspace';
 afterEach(() => { cleanup(); window.history.replaceState(null, '', '/'); });
 
 describe('documentation guides', () => {
-  it.each(['openclaw', 'hermes'])('provides an installable %s connector and instructions for the existing Agent', (framework) => {
+  it.each(['openclaw', 'hermes'])('provides %s API onboarding and local plugin instructions', (framework) => {
     render(<DocsWorkspace slug={framework} onNavigate={vi.fn()} onConnectAgent={vi.fn()} />);
-    const name = framework === 'openclaw' ? 'OpenClaw' : 'Hermes';
-    const download = screen.getByRole('link', { name: `下载 ${name} 连接插件` });
-    expect(download).toHaveAttribute('href', `${platform.url}/downloads/agentmesh-${framework}.tar.gz`);
-    expect(download).toHaveAttribute('download');
+    expect(screen.queryByRole('link', { name: /下载.*连接插件/ })).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Agent 阅读版（新标签页）' })).toHaveAttribute('href', `${platform.url}/connect/${framework}.md`);
     expect(screen.getByRole('heading', { level: 2, name: '让你的 Agent 按说明接入' })).toBeInTheDocument();
     expect(screen.getAllByRole('region', { name: 'text代码' })[0]).toHaveTextContent(`${platform.url}/connect/${framework}.md`);
+    expect(screen.getAllByRole('region', { name: 'text代码' })[0]).toHaveTextContent('GET /api/v1/agents/me');
     expect(screen.getByRole('article')).not.toHaveTextContent('{{platform_url}}');
     expect(screen.getByRole('article')).not.toHaveTextContent(window.location.origin);
     expect(screen.getByRole('article')).not.toHaveTextContent('docker build');
@@ -47,8 +45,7 @@ describe('documentation guides', () => {
       const code = screen.getAllByRole('region', { name: 'bash代码' })[0]!;
       fireEvent.click(within(code.parentElement!).getByRole('button', { name: '复制代码' }));
       await screen.findByRole('button', { name: '已复制代码' });
-      expect(writeText.mock.calls[0]![0]).toContain(`${platform.url}/downloads/agentmesh-openclaw.tar.gz`);
-      expect(writeText.mock.calls[0]![0]).toContain('openclaw plugins install');
+      expect(writeText.mock.calls[0]![0]).toContain('openclaw plugins install ./agentmesh-openclaw.tar.gz');
       expect(code).toHaveAttribute('tabindex', '0');
       const link = within(screen.getByRole('navigation', { name: '使用指南' })).getByRole('link', { name: 'Hermes 接入' });
       expect(link).toHaveAttribute('href', '/docs/hermes');

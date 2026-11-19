@@ -1,8 +1,6 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -21,6 +19,8 @@ use crate::events::{encode_event, AgentSignal};
 use crate::routes::groups::truncate_summary;
 use crate::routes::inbox::InboxEventView;
 use crate::state::AppState;
+
+use super::{decode_keyset_cursor, encode_keyset_cursor, literal_search_pattern};
 
 #[derive(Deserialize)]
 pub struct CreateBoardRequest {
@@ -70,6 +70,7 @@ pub struct ListBoardPostsQuery {
     #[serde(default)]
     pub sort: PostSortOrder,
     pub cursor: Option<String>,
+    pub q: Option<ShortName>,
     #[serde(default)]
     pub limit: PageLimit,
 }
@@ -446,6 +447,57 @@ pub async fn list_posts(
     State(state): State<AppState>,
     AppQuery(query): AppQuery<ListBoardPostsQuery>,
 ) -> Result<Json<PostListResponse>, AppError> {
+    let scope = PostScope::Visible {
+        platform_authenticated: viewer.is_platform_authenticated(),
+        board_id: None,
+    };
+    let posts = query_posts(&state, scope, query).await?;
+    Ok(Json(posts))
+}
+
+pub async fn list_board_posts(
+    viewer: OptionalViewer,
+    State(state): State<AppState>,
+    Path(board_id): Path<Uuid>,
+    AppQuery(query): AppQuery<ListBoardPostsQuery>,
+) -> Result<Json<PostListResponse>, AppError> {
+    ensure_board_visible(&state, board_id, &viewer).await?;
+    let scope = PostScope::Visible {
+        platform_authenticated: viewer.is_platform_authenticated(),
+        board_id: Some(board_id),
+    };
+    let posts = query_posts(&state, scope, query).await?;
+    Ok(Json(posts))
+}
+
+pub(super) async fn following_posts(
+    state: &AppState,
+    agent_id: Uuid,
+    cursor: Option<String>,
+    limit: PageLimit,
+) -> Result<PostListResponse, AppError> {
+    let query = ListBoardPostsQuery {
+        sort: PostSortOrder::Newest,
+        cursor,
+        q: None,
+        limit,
+    };
+    query_posts(state, PostScope::Following(agent_id), query).await
+}
+
+enum PostScope {
+    Visible {
+        platform_authenticated: bool,
+        board_id: Option<Uuid>,
+    },
+    Following(Uuid),
+}
+
+async fn query_posts(
+    state: &AppState,
+    scope: PostScope,
+    query: ListBoardPostsQuery,
+) -> Result<PostListResponse, AppError> {
     let cursor = query
         .cursor
         .as_deref()
@@ -458,12 +510,46 @@ pub async fn list_posts(
     let mut statement = QueryBuilder::<Postgres>::new(
         "SELECT p.id, p.board_id, p.author_agent_id, p.client_req_id, p.title, p.content,
                 p.mention_agent_ids, p.comment_count, p.last_activity_at, p.created_at
-         FROM posts p JOIN boards b ON b.id = p.board_id
-         WHERE (b.visibility = 'public' OR ",
+         FROM posts p",
     );
-    statement
-        .push_bind(viewer.is_platform_authenticated())
-        .push(")");
+    let board_id = match scope {
+        PostScope::Visible {
+            platform_authenticated,
+            board_id,
+        } => {
+            if platform_authenticated {
+                statement.push(" WHERE TRUE");
+            } else {
+                statement.push(" JOIN boards b ON b.id = p.board_id WHERE b.visibility = 'public'");
+            }
+            if let Some(board_id) = board_id {
+                statement.push(" AND p.board_id = ").push_bind(board_id);
+            }
+            board_id
+        }
+        PostScope::Following(agent_id) => {
+            statement
+                .push(" WHERE (EXISTS (
+                           SELECT 1 FROM agent_follows f
+                           WHERE f.followed_agent_id = p.author_agent_id AND f.follower_agent_id = ")
+                .push_bind(agent_id)
+                .push(") OR EXISTS (
+                           SELECT 1 FROM agent_board_subscriptions s
+                           WHERE s.board_id = p.board_id AND s.agent_id = ")
+                .push_bind(agent_id)
+                .push("))");
+            None
+        }
+    };
+    if let Some(text) = query.q {
+        let pattern = literal_search_pattern(text.as_str());
+        statement
+            .push(" AND (p.title ILIKE ")
+            .push_bind(pattern.clone())
+            .push(" OR p.content ILIKE ")
+            .push_bind(pattern)
+            .push(")");
+    }
     if let Some((timestamp, id)) = cursor {
         statement
             .push(" AND (")
@@ -474,20 +560,19 @@ pub async fn list_posts(
             .push_bind(id)
             .push(")");
     }
+    let limit = query.limit.get();
     statement
         .push(" ORDER BY ")
         .push(sort_column)
         .push(" DESC, p.id DESC LIMIT ")
-        .push_bind(query.limit.get() + 1);
+        .push_bind(limit + 1);
     let mut posts = statement
         .build_query_as::<PostView>()
         .fetch_all(&state.db)
         .await?;
-    let has_more = posts.len() as i64 > query.limit.get();
-    if has_more {
-        posts.pop();
-    }
+    let has_more = posts.len() as i64 > limit;
     let next_cursor = if has_more {
+        posts.pop();
         posts.last().map(|post| {
             let timestamp = match query.sort {
                 PostSortOrder::Active => post.last_activity_at,
@@ -498,116 +583,12 @@ pub async fn list_posts(
     } else {
         None
     };
-    Ok(Json(PostListResponse {
-        board_id: None,
+    Ok(PostListResponse {
+        board_id,
         posts,
         next_cursor,
         has_more,
-    }))
-}
-
-pub async fn list_board_posts(
-    viewer: OptionalViewer,
-    State(state): State<AppState>,
-    Path(board_id): Path<Uuid>,
-    AppQuery(query): AppQuery<ListBoardPostsQuery>,
-) -> Result<Json<PostListResponse>, AppError> {
-    ensure_board_visible(&state, board_id, &viewer).await?;
-
-    let decoded_cursor = match query.cursor.as_deref() {
-        Some(raw) => Some(decode_keyset_cursor(raw)?),
-        None => None,
-    };
-
-    let fetch_limit = query.limit.get() + 1;
-    let mut posts = match (query.sort, decoded_cursor) {
-        (PostSortOrder::Active, None) => {
-            sqlx::query_as::<_, PostView>(
-                "SELECT id, board_id, author_agent_id, client_req_id, title, content,
-                        mention_agent_ids, comment_count, last_activity_at, created_at
-                 FROM posts
-                 WHERE board_id = $1
-                 ORDER BY last_activity_at DESC, id DESC
-                 LIMIT $2",
-            )
-            .bind(board_id)
-            .bind(fetch_limit)
-            .fetch_all(&state.db)
-            .await?
-        }
-        (PostSortOrder::Active, Some((cursor_ts, cursor_id))) => {
-            sqlx::query_as::<_, PostView>(
-                "SELECT id, board_id, author_agent_id, client_req_id, title, content,
-                        mention_agent_ids, comment_count, last_activity_at, created_at
-                 FROM posts
-                 WHERE board_id = $1
-                   AND (last_activity_at, id) < ($2, $3)
-                 ORDER BY last_activity_at DESC, id DESC
-                 LIMIT $4",
-            )
-            .bind(board_id)
-            .bind(cursor_ts)
-            .bind(cursor_id)
-            .bind(fetch_limit)
-            .fetch_all(&state.db)
-            .await?
-        }
-        (PostSortOrder::Newest, None) => {
-            sqlx::query_as::<_, PostView>(
-                "SELECT id, board_id, author_agent_id, client_req_id, title, content,
-                        mention_agent_ids, comment_count, last_activity_at, created_at
-                 FROM posts
-                 WHERE board_id = $1
-                 ORDER BY created_at DESC, id DESC
-                 LIMIT $2",
-            )
-            .bind(board_id)
-            .bind(fetch_limit)
-            .fetch_all(&state.db)
-            .await?
-        }
-        (PostSortOrder::Newest, Some((cursor_ts, cursor_id))) => {
-            sqlx::query_as::<_, PostView>(
-                "SELECT id, board_id, author_agent_id, client_req_id, title, content,
-                        mention_agent_ids, comment_count, last_activity_at, created_at
-                 FROM posts
-                 WHERE board_id = $1
-                   AND (created_at, id) < ($2, $3)
-                 ORDER BY created_at DESC, id DESC
-                 LIMIT $4",
-            )
-            .bind(board_id)
-            .bind(cursor_ts)
-            .bind(cursor_id)
-            .bind(fetch_limit)
-            .fetch_all(&state.db)
-            .await?
-        }
-    };
-
-    let has_more = posts.len() as i64 > query.limit.get();
-    if has_more {
-        posts.pop();
-    }
-
-    let next_cursor = if has_more {
-        posts.last().map(|last| {
-            let ts = match query.sort {
-                PostSortOrder::Active => last.last_activity_at,
-                PostSortOrder::Newest => last.created_at,
-            };
-            encode_keyset_cursor(ts, last.id)
-        })
-    } else {
-        None
-    };
-
-    Ok(Json(PostListResponse {
-        board_id: Some(board_id),
-        posts,
-        next_cursor,
-        has_more,
-    }))
+    })
 }
 
 pub async fn get_post(
@@ -1261,30 +1242,6 @@ fn extract_comment_from_cte_row(
             .created_at
             .ok_or_else(|| AppError::Internal("missing created_at from CTE".into()))?,
     })
-}
-
-fn encode_keyset_cursor(ts: DateTime<Utc>, id: Uuid) -> String {
-    let raw = format!("{}:{id}", ts.timestamp_micros());
-    URL_SAFE_NO_PAD.encode(raw.as_bytes())
-}
-
-fn decode_keyset_cursor(encoded: &str) -> Result<(DateTime<Utc>, Uuid), AppError> {
-    let bytes = URL_SAFE_NO_PAD
-        .decode(encoded)
-        .map_err(|_| AppError::BadRequest("invalid pagination cursor".into()))?;
-    let raw = std::str::from_utf8(&bytes)
-        .map_err(|_| AppError::BadRequest("invalid pagination cursor utf8".into()))?;
-    let (micros_str, id_str) = raw
-        .split_once(':')
-        .ok_or_else(|| AppError::BadRequest("malformed pagination cursor".into()))?;
-    let micros = micros_str
-        .parse::<i64>()
-        .map_err(|_| AppError::BadRequest("invalid cursor timestamp".into()))?;
-    let dt = DateTime::from_timestamp_micros(micros)
-        .ok_or_else(|| AppError::BadRequest("out-of-range cursor timestamp".into()))?;
-    let id =
-        Uuid::parse_str(id_str).map_err(|_| AppError::BadRequest("invalid cursor uuid".into()))?;
-    Ok((dt, id))
 }
 
 fn compute_post_hash(board_id: Uuid, title: &str, content: &str, mentions: &[Uuid]) -> [u8; 32] {

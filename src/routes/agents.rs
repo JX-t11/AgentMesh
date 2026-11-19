@@ -3,16 +3,26 @@ use axum::http::StatusCode;
 use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
+use sqlx::{FromRow, Postgres, QueryBuilder};
 use uuid::Uuid;
 
 use crate::auth::{
     generate_agent_token, AdminAuth, AgentAuth, AgentPrincipal, GovernanceAuth, UserAuth,
 };
-use crate::domain::types::{CapabilityList, DescriptionText, NonEmptyText, ShortName, Slug};
-use crate::error::{AppError, AppJson};
+use crate::domain::types::{
+    CapabilityList, DescriptionText, NonEmptyText, PageLimit, ShortName, Slug,
+};
+use crate::error::{AppError, AppJson, AppQuery};
 use crate::events::AgentSignal;
 use crate::state::AppState;
+
+use super::{decode_keyset_cursor, encode_keyset_cursor, literal_search_pattern};
+
+const PROFILE_SELECT: &str =
+    "SELECT a.id, a.slug, a.display_name, a.framework, a.description, a.capabilities,
+            a.owner_user_id, u.username AS owner_username,
+            (a.revoked_at IS NOT NULL) AS is_revoked, a.created_at
+     FROM agents a LEFT JOIN users u ON u.id = a.owner_user_id";
 
 #[derive(Deserialize)]
 pub struct RegisterAgentRequest {
@@ -51,6 +61,23 @@ pub struct AgentEnvelope {
 #[derive(Serialize)]
 pub struct AgentListResponse {
     pub agents: Vec<AgentView>,
+}
+
+#[derive(Deserialize)]
+pub struct SearchAgentsQuery {
+    pub q: Option<ShortName>,
+    pub framework: Option<Slug>,
+    pub capability: Option<NonEmptyText<64>>,
+    pub cursor: Option<String>,
+    #[serde(default)]
+    pub limit: PageLimit,
+}
+
+#[derive(Serialize)]
+pub struct AgentSearchResponse {
+    pub agents: Vec<AgentView>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
 }
 
 #[derive(Debug, Clone, Serialize, FromRow)]
@@ -237,6 +264,99 @@ pub async fn list_agents(
     .await?;
 
     Ok(Json(AgentListResponse { agents }))
+}
+
+pub async fn search_agents(
+    State(state): State<AppState>,
+    AppQuery(query): AppQuery<SearchAgentsQuery>,
+) -> Result<Json<AgentSearchResponse>, AppError> {
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(decode_keyset_cursor)
+        .transpose()?;
+    let mut statement = QueryBuilder::<Postgres>::new(PROFILE_SELECT);
+    statement.push(" WHERE a.revoked_at IS NULL");
+    if let Some(text) = query.q {
+        let pattern = literal_search_pattern(text.as_str());
+        statement
+            .push(" AND (a.slug ILIKE ")
+            .push_bind(pattern.clone())
+            .push(" OR a.display_name ILIKE ")
+            .push_bind(pattern)
+            .push(")");
+    }
+    if let Some(framework) = &query.framework {
+        statement
+            .push(" AND a.framework = ")
+            .push_bind(framework.as_str());
+    }
+    if let Some(capability) = &query.capability {
+        statement
+            .push(" AND ")
+            .push_bind(capability.as_str().to_ascii_lowercase())
+            .push(" = ANY(a.capabilities)");
+    }
+    if let Some((timestamp, id)) = cursor {
+        statement
+            .push(" AND (a.created_at, a.id) < (")
+            .push_bind(timestamp)
+            .push(", ")
+            .push_bind(id)
+            .push(")");
+    }
+    let limit = query.limit.get();
+    statement
+        .push(" ORDER BY a.created_at DESC, a.id DESC LIMIT ")
+        .push_bind(limit + 1);
+    let mut agents = statement
+        .build_query_as::<AgentView>()
+        .fetch_all(&state.db)
+        .await?;
+    let has_more = agents.len() as i64 > limit;
+    let next_cursor = if has_more {
+        agents.pop();
+        agents
+            .last()
+            .map(|agent| encode_keyset_cursor(agent.created_at, agent.id))
+    } else {
+        None
+    };
+    Ok(Json(AgentSearchResponse {
+        agents,
+        next_cursor,
+        has_more,
+    }))
+}
+
+pub async fn get_agent_profile(
+    State(state): State<AppState>,
+    Path(agent_id): Path<Uuid>,
+) -> Result<Json<AgentEnvelope>, AppError> {
+    let mut statement = QueryBuilder::new(PROFILE_SELECT);
+    statement.push(" WHERE a.id = ").push_bind(agent_id);
+    fetch_profile(&state, statement).await
+}
+
+pub async fn get_agent_by_slug(
+    State(state): State<AppState>,
+    Path(slug): Path<Slug>,
+) -> Result<Json<AgentEnvelope>, AppError> {
+    let mut statement = QueryBuilder::new(PROFILE_SELECT);
+    statement.push(" WHERE a.slug = ").push_bind(slug.as_str());
+    fetch_profile(&state, statement).await
+}
+
+async fn fetch_profile(
+    state: &AppState,
+    mut statement: QueryBuilder<'_, Postgres>,
+) -> Result<Json<AgentEnvelope>, AppError> {
+    let agent = statement
+        .build_query_as::<AgentView>()
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("agent not found".into()))?;
+    Ok(Json(AgentEnvelope { agent }))
 }
 
 pub async fn get_me(

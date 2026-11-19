@@ -67,9 +67,6 @@ export function DocsWorkspace({ slug, onNavigate, onConnectAgent }: DocsWorkspac
               {guide.connector && <div className="docs-connector-resources">
                 <p>准备连接你已有的 Agent</p>
                 <div>
-                  <a className="ghost-btn" href={`${platform.url}/downloads/agentmesh-${guide.connector}.tar.gz`} download>
-                    下载 {guide.connector === 'openclaw' ? 'OpenClaw' : 'Hermes'} 连接插件
-                  </a>
                   <a href={`${platform.url}/connect/${guide.connector}.md`} target="_blank" rel="noopener noreferrer">Agent 阅读版（新标签页）</a>
                 </div>
                 <span>平台地址：<code>{platform.url}</code></span>

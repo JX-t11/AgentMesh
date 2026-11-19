@@ -3,15 +3,15 @@ import { UnknownAgentRefresher } from './api/agentDirectorySync';
 import { ApiHttpError, ObserverApiClient } from './api/client';
 import { AgentDirectoryDrawer } from './components/AgentDirectoryDrawer';
 import { AgentProfileDialog } from './components/AgentProfileDialog';
-import { AuthModal } from './components/AuthModal';
+import { AuthModal, type AuthModalMode } from './components/AuthModal';
 import { ChatDrawer } from './components/ChatDrawer';
 import { Dialog } from './components/Dialog';
 import { DocsWorkspace } from './components/DocsWorkspace';
 import { ForumWorkspace } from './components/ForumWorkspace';
-import { HomeWorkspace, type PreviewStatus } from './components/HomeWorkspace';
+import { HOME_TOPIC_LIMIT, HomeWorkspace, type PreviewStatus } from './components/HomeWorkspace';
 import { ImWorkspace } from './components/ImWorkspace';
 import { PlatformSidebar } from './components/PlatformSidebar';
-import { TopBar, type WorkspaceMode } from './components/TopBar';
+import { HeaderActions, HomeHeader, TopBar, type WorkspaceMode } from './components/TopBar';
 import { UserConsoleDrawer } from './components/UserConsoleDrawer';
 import { readPlatformPage } from './navigation';
 import {
@@ -130,7 +130,7 @@ export function App({ apiClient, socketOptions }: AppProps = {}) {
     : currentAgent
       ? `agent:${currentAgent.id}`
       : null;
-  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [authMode, setAuthMode] = useState<AuthModalMode | null>(null);
   const [isConsoleOpen, setIsConsoleOpen] = useState(false);
   const [consoleTab, setConsoleTab] = useState<'agents' | 'dm'>('agents');
   const [connectAfterAuth, setConnectAfterAuth] = useState(false);
@@ -165,9 +165,12 @@ export function App({ apiClient, socketOptions }: AppProps = {}) {
   const [hiddenPlatformCount, setHiddenPlatformCount] = useState(0);
   const [activeBoardId, setActiveBoardId] = useState<string | null>(initialPage.boardId);
   const [boardSort, setBoardSort] = useState<PostSortOrder>('active');
+  const [boardSearch, setBoardSearch] = useState<{ boardId: string | null; query: string } | null>(null);
+  const boardQuery = boardSearch?.boardId === activeBoardId ? boardSearch.query : '';
   const [boardFeed, setBoardFeed] = useState<BoardFeedState | null>(null);
   const [isLoadingBoardFeed, setIsLoadingBoardFeed] = useState(false);
   const [isLoadingMorePosts, setIsLoadingMorePosts] = useState(false);
+  const boardFeedRequest = useRef(0);
 
   const [activePostId, setActivePostId] = useState<string | null>(initialPage.postId);
   const [topicAuthorFilterId, setTopicAuthorFilterId] = useState<string | null>(null);
@@ -230,7 +233,8 @@ export function App({ apiClient, socketOptions }: AppProps = {}) {
 
   const navigateTo = useCallback(
     (path: string) => {
-      if (window.location.pathname !== path) window.history.pushState(null, '', path);
+      const { pathname, search, hash } = window.location;
+      if (pathname + search + hash !== path) window.history.pushState(null, '', path);
       applyLocation(path);
     },
     [applyLocation],
@@ -305,7 +309,9 @@ export function App({ apiClient, socketOptions }: AppProps = {}) {
   }, [currentAgent, currentUser, myAgents, dmRequests]);
 
   const agentRefresher = useMemo(
-    () => new UnknownAgentRefresher(() => api.listAgents(), setAgents),
+    () => new UnknownAgentRefresher((id) => api.getAgent(id), (found) => {
+      setAgents((current) => current.some((agent) => agent.id === found.id) ? current : [...current, found]);
+    }),
     [api],
   );
 
@@ -678,22 +684,20 @@ export function App({ apiClient, socketOptions }: AppProps = {}) {
   }, [activeGroupId, api]);
 
   const loadBoardPostsFirstPage = useCallback(
-    async (boardId: string | null, sort: PostSortOrder) => {
+    async (boardId: string | null, sort: PostSortOrder, q: string) => {
+      const request = ++boardFeedRequest.current;
       const token = api.getAuthToken();
+      const isCurrent = () => request === boardFeedRequest.current && token === api.getAuthToken();
       setIsLoadingBoardFeed(true);
+      setIsLoadingMorePosts(false);
       setBoardFeed(createBoardFeedState(boardId, sort));
       try {
-        const page = await api.listBoardPosts(boardId, { sort, limit: 25 });
-        if (token !== api.getAuthToken()) return;
-        setBoardFeed((prev) =>
-          prev && prev.boardId === boardId && prev.sort === sort
-            ? applyInitialBoardFeed(boardId, sort, page)
-            : prev,
-        );
+        const page = await api.listBoardPosts(boardId, { sort, q, limit: 25 });
+        if (isCurrent()) setBoardFeed(applyInitialBoardFeed(boardId, sort, page));
       } catch (err) {
-        setErrorBanner(err instanceof Error ? err.message : '加载板块帖子失败');
+        if (isCurrent()) setErrorBanner(err instanceof Error ? err.message : '加载板块帖子失败');
       } finally {
-        setIsLoadingBoardFeed(false);
+        if (isCurrent()) setIsLoadingBoardFeed(false);
       }
     },
     [api],
@@ -701,16 +705,17 @@ export function App({ apiClient, socketOptions }: AppProps = {}) {
 
   useEffect(() => {
     if (workspace === 'forum' && forumView === 'topics') {
-      void loadBoardPostsFirstPage(activeBoardId, boardSort);
+      void loadBoardPostsFirstPage(activeBoardId, boardSort, boardQuery);
     }
-  }, [workspace, forumView, activeBoardId, boardSort, loadBoardPostsFirstPage, sessionIdentityKey]);
+    return () => { boardFeedRequest.current += 1; };
+  }, [workspace, forumView, activeBoardId, boardSort, boardQuery, loadBoardPostsFirstPage, sessionIdentityKey]);
 
   useEffect(() => {
     if (workspace !== 'home') return;
     let cancelled = false;
     const token = api.getAuthToken();
     setHomePostsStatus({ isLoading: true, error: null });
-    void api.listBoardPosts(null, { sort: 'active', limit: 6 }).then((page) => {
+    void api.listBoardPosts(null, { sort: 'active', limit: HOME_TOPIC_LIMIT }).then((page) => {
       if (cancelled || token !== api.getAuthToken()) return;
       setHomePosts(page.posts);
       setHomePostsStatus({ isLoading: false, error: null });
@@ -951,18 +956,6 @@ export function App({ apiClient, socketOptions }: AppProps = {}) {
     selectFullScreenGroup(created.id);
   };
 
-  const handleSelectWorkspace = (mode: WorkspaceMode) => {
-    if (mode === 'home') {
-      navigateTo('/');
-    } else if (mode === 'forum') {
-      navigateTo('/forum');
-    } else if (mode === 'docs') {
-      navigateTo('/docs');
-    } else {
-      navigateTo(activeGroupId ? `/chat/${encodeURIComponent(activeGroupId)}` : '/chat');
-    }
-  };
-
   const handleOpenChatDrawerGroup = (groupId?: string) => {
     if (groupId) {
       setActiveGroupId(groupId);
@@ -1019,22 +1012,22 @@ export function App({ apiClient, socketOptions }: AppProps = {}) {
       return;
     }
     const { boardId, sort, nextCursor } = boardFeed;
+    const request = boardFeedRequest.current;
+    const token = api.getAuthToken();
+    const isCurrent = () => request === boardFeedRequest.current && token === api.getAuthToken();
     setIsLoadingMorePosts(true);
     try {
       const page = await api.listBoardPosts(boardId, {
         sort,
+        q: boardQuery,
         cursor: nextCursor,
         limit: 25,
       });
-      setBoardFeed((prev) =>
-        prev && prev.boardId === boardId && prev.sort === sort
-          ? appendBoardFeedPage(prev, page)
-          : prev,
-      );
+      if (isCurrent()) setBoardFeed((prev) => prev && appendBoardFeedPage(prev, page));
     } catch (err) {
-      setErrorBanner(err instanceof Error ? err.message : '加载更多帖子失败');
+      if (isCurrent()) setErrorBanner(err instanceof Error ? err.message : '加载更多帖子失败');
     } finally {
-      setIsLoadingMorePosts(false);
+      if (isCurrent()) setIsLoadingMorePosts(false);
     }
   };
 
@@ -1068,7 +1061,7 @@ export function App({ apiClient, socketOptions }: AppProps = {}) {
     setIsAgentDrawerOpen(false);
     setConsoleTab(tab);
     if (currentUser || currentAgent) setIsConsoleOpen(true);
-    else setIsAuthModalOpen(true);
+    else setAuthMode('login');
     if (isCompactLayout) setIsNavigationOpen(false);
   };
 
@@ -1076,7 +1069,7 @@ export function App({ apiClient, socketOptions }: AppProps = {}) {
     if (currentUser || currentAgent) openConsole('agents');
     else {
       setConnectAfterAuth(true);
-      setIsAuthModalOpen(true);
+      setAuthMode('login');
     }
   };
 
@@ -1113,47 +1106,47 @@ export function App({ apiClient, socketOptions }: AppProps = {}) {
     />
   );
 
-  return (
-    <div
-      className={`app-shell mode-${workspace} ${!isNavigationOpen ? 'navigation-collapsed' : ''}`}
-    >
-      <TopBar
-        workspace={workspace}
-        onSelectWorkspace={handleSelectWorkspace}
-        groupCount={groups.length}
-        boardCount={boards.length}
-        forumPendingCount={forumPendingCount}
-        agentCount={agents.length}
-        isAgentDrawerOpen={isAgentDrawerOpen}
-        onToggleAgentDrawer={() => {
-          setIsConsoleOpen(false);
-          setIsAgentDrawerOpen((v) => !v);
-        }}
-        currentUser={currentUser}
-        currentAgent={currentAgent}
-        myAgentCount={myAgents.length}
-        pendingDmCount={pendingDmCount}
-        onOpenAuthModal={() => setIsAuthModalOpen(true)}
-        isConsoleOpen={isConsoleOpen}
-        onToggleConsole={() => {
-          setIsAgentDrawerOpen(false);
-          setIsConsoleOpen((v) => !v);
-        }}
-        onLogout={() => void handleLogout()}
-        isNavigationOpen={isNavigationOpen}
-        onToggleNavigation={() => setIsNavigationOpen((value) => !value)}
-        onSearch={() => {
-          navigateTo('/forum');
-          setSearchRequest((value) => value + 1);
-        }}
-        resolvedScheme={resolvedScheme}
-        onToggleTheme={toggleColorScheme}
-        isChatDrawerOpen={isChatDrawerOpen}
-        chatDrawerUnreadCount={chatDrawerUnreadCount}
-        onToggleChatDrawer={handleToggleChatDrawer}
-      />
+  const headerActions = (
+    <HeaderActions
+      workspace={workspace}
+      onNavigate={navigateTo}
+      forumPendingCount={forumPendingCount}
+      currentUser={currentUser}
+      currentAgent={currentAgent}
+      myAgentCount={myAgents.length}
+      pendingDmCount={pendingDmCount}
+      onOpenAuthModal={() => setAuthMode('login')}
+      isConsoleOpen={isConsoleOpen}
+      onToggleConsole={() => {
+        setIsAgentDrawerOpen(false);
+        setIsConsoleOpen((v) => !v);
+      }}
+      onLogout={() => void handleLogout()}
+      onSearch={() => {
+        navigateTo('/forum');
+        setSearchRequest((value) => value + 1);
+      }}
+      resolvedScheme={resolvedScheme}
+      onToggleTheme={toggleColorScheme}
+      isChatDrawerOpen={isChatDrawerOpen}
+      chatDrawerUnreadCount={chatDrawerUnreadCount}
+      onToggleChatDrawer={handleToggleChatDrawer}
+    />
+  );
 
-      {isNavigationOpen &&
+  return (
+    <div className={workspace === 'home' ? 'landing-page' : `app-shell mode-${workspace} ${isNavigationOpen ? '' : 'navigation-collapsed'}`}>
+      <a className="skip-link" href="#workspace-content">跳转到主要内容</a>
+      {workspace === 'home' ? (
+        <HomeHeader onNavigate={navigateTo} onOpenAgents={openAgentDirectory}>{headerActions}</HomeHeader>
+      ) : (
+        <TopBar onNavigate={navigateTo} isNavigationOpen={isNavigationOpen}
+          onToggleNavigation={() => setIsNavigationOpen((value) => !value)}>
+          {headerActions}
+        </TopBar>
+      )}
+
+      {workspace !== 'home' && isNavigationOpen &&
         (isCompactLayout ? (
           <Dialog
             label="平台导航"
@@ -1202,6 +1195,9 @@ export function App({ apiClient, socketOptions }: AppProps = {}) {
           hasUpdates={forumPendingCount > 0}
           onNavigate={navigateTo}
           onConnectAgent={connectAgent}
+          onRegisterAgent={() => setAuthMode('agent-register')}
+          followingApi={currentAgent ? api : undefined}
+          followingRefreshKey={homeRefreshKey}
           onOpenConsole={openConsole}
           onOpenAgents={openAgentDirectory}
           onRefresh={() => {
@@ -1228,7 +1224,7 @@ export function App({ apiClient, socketOptions }: AppProps = {}) {
           currentAgent={currentAgent}
           onManageAgents={() => {
             if (currentUser || currentAgent) setIsConsoleOpen(true);
-            else setIsAuthModalOpen(true);
+            else setAuthMode('login');
           }}
           onCreateGroup={handleCreateGroup}
           activeGroupId={activeGroupId}
@@ -1250,19 +1246,25 @@ export function App({ apiClient, socketOptions }: AppProps = {}) {
           boards={boards}
           currentUser={currentUser}
           currentAgent={currentAgent}
-          onOpenAuthModal={() => setIsAuthModalOpen(true)}
+          onOpenAuthModal={() => setAuthMode('login')}
           onManageAgents={() => setIsConsoleOpen(true)}
           activeBoardId={activeBoardId}
           onSelectBoard={(boardId) => navigateTo(boardId ? `/c/${boardId}` : '/forum')}
           forumView={forumView}
           onShowCategories={() => navigateTo('/categories')}
           searchRequest={searchRequest}
+          postQuery={boardQuery}
+          onSearchPosts={(query) => {
+            setErrorBanner(null);
+            if (query === boardQuery) void loadBoardPostsFirstPage(activeBoardId, boardSort, query);
+            else setBoardSearch({ boardId: activeBoardId, query });
+          }}
           feed={boardFeed}
           isLoadingFeed={isLoadingBoardFeed}
           isLoadingMorePosts={isLoadingMorePosts}
           onChangeSort={setBoardSort}
           onRefreshBoard={() => {
-            void loadBoardPostsFirstPage(activeBoardId, boardSort);
+            void loadBoardPostsFirstPage(activeBoardId, boardSort, boardQuery);
             void api
               .listBoardCatalog()
               .then((cat) => {
@@ -1343,8 +1345,8 @@ export function App({ apiClient, socketOptions }: AppProps = {}) {
 
       {isAgentDrawerOpen && (
         <AgentDirectoryDrawer
-          agents={agents}
-          onRefresh={refreshAgentsManually}
+          api={api}
+          frameworks={Array.from(new Set(agents.map((agent) => agent.framework))).sort()}
           onClose={() => setIsAgentDrawerOpen(false)}
         />
       )}
@@ -1370,14 +1372,15 @@ export function App({ apiClient, socketOptions }: AppProps = {}) {
         />
       )}
 
-      {isAuthModalOpen && (
+      {authMode && (
         <AuthModal
+          initialMode={authMode}
           onLogin={handleLogin}
           onRegister={handleRegister}
           onRegisterAgent={handleRegisterAutonomousAgent}
           onConnectAgentToken={handleConnectAgentToken}
           onClose={() => {
-            setIsAuthModalOpen(false);
+            setAuthMode(null);
             setConnectAfterAuth(false);
           }}
         />

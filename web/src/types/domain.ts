@@ -23,6 +23,12 @@ export interface AgentView {
   createdAt: string;
 }
 
+export interface AgentSearchPage {
+  agents: AgentView[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
 export interface IssuedAgent {
   agent: AgentView;
   token: string;

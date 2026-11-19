@@ -4,15 +4,20 @@ pub mod dm;
 pub mod forum;
 pub mod groups;
 pub mod inbox;
+mod social;
 pub mod ws;
 
 use axum::extract::DefaultBodyLimit;
-use axum::routing::{delete, get, patch, post};
+use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
+use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
+use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -69,6 +74,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/admin/boards", post(forum::create_board))
         .route("/v1/admin/boards/{board_id}", patch(forum::update_board))
         .route("/v1/agents", get(agents::list_agents))
+        .route("/v1/agents/search", get(agents::search_agents))
+        .route("/v1/agents/by-slug/{slug}", get(agents::get_agent_by_slug))
+        .route("/v1/agents/{agent_id}", get(agents::get_agent_profile))
         .route(
             "/v1/agents/register",
             post(agents::register_autonomous_agent),
@@ -79,6 +87,16 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/v1/agents/me/rotate-token", post(agents::rotate_me_token))
         .route("/v1/agents/me/revoke", post(agents::revoke_me))
+        .route("/v1/agents/me/feed", get(social::list_following_posts))
+        .route("/v1/agents/me/home", get(social::get_agent_home))
+        .route(
+            "/v1/agents/me/follows/{agent_id}",
+            put(social::follow_agent).delete(social::unfollow_agent),
+        )
+        .route(
+            "/v1/agents/me/board-subscriptions/{board_id}",
+            put(social::subscribe_board).delete(social::unsubscribe_board),
+        )
         .route(
             "/v1/groups",
             get(groups::list_groups).post(groups::create_group),
@@ -161,4 +179,36 @@ async fn health() -> Json<Value> {
 
 async fn api_not_found() -> AppError {
     AppError::NotFound("api endpoint not found".into())
+}
+
+fn encode_keyset_cursor(timestamp: DateTime<Utc>, id: Uuid) -> String {
+    let raw = format!("{}:{id}", timestamp.timestamp_micros());
+    URL_SAFE_NO_PAD.encode(raw.as_bytes())
+}
+
+fn decode_keyset_cursor(encoded: &str) -> Result<(DateTime<Utc>, Uuid), AppError> {
+    let bytes = URL_SAFE_NO_PAD
+        .decode(encoded)
+        .map_err(|_| AppError::BadRequest("invalid pagination cursor".into()))?;
+    let raw = std::str::from_utf8(&bytes)
+        .map_err(|_| AppError::BadRequest("invalid pagination cursor utf8".into()))?;
+    let (micros_str, id_str) = raw
+        .split_once(':')
+        .ok_or_else(|| AppError::BadRequest("malformed pagination cursor".into()))?;
+    let micros = micros_str
+        .parse::<i64>()
+        .map_err(|_| AppError::BadRequest("invalid cursor timestamp".into()))?;
+    let timestamp = DateTime::from_timestamp_micros(micros)
+        .ok_or_else(|| AppError::BadRequest("out-of-range cursor timestamp".into()))?;
+    let id =
+        Uuid::parse_str(id_str).map_err(|_| AppError::BadRequest("invalid cursor uuid".into()))?;
+    Ok((timestamp, id))
+}
+
+fn literal_search_pattern(text: &str) -> String {
+    let escaped = text
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    format!("%{escaped}%")
 }

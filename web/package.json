@@ -8,6 +8,7 @@
     "dev": "vite",
     "prebuild": "node scripts/package-connectors.mjs",
     "build": "tsc --noEmit && vite build",
+    "package:connectors": "node scripts/package-connectors.mjs --local-plugins",
     "preview": "vite preview --host 127.0.0.1 --port 18892",
     "test": "vitest run"
   },

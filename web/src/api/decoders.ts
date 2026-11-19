@@ -1,4 +1,5 @@
 import type {
+  AgentSearchPage,
   AgentView,
   BoardCatalog,
   BoardView,
@@ -64,6 +65,15 @@ export function decodeAgentList(raw: unknown): AgentView[] {
   return expectArray(obj.agents, 'agentList.agents').map((item, idx) =>
     decodeAgent(item, `agents[${idx}]`),
   );
+}
+
+export function decodeAgentSearchPage(raw: unknown): AgentSearchPage {
+  const obj = expectRecord(raw, 'agentSearchPage');
+  return {
+    agents: decodeAgentList(obj),
+    nextCursor: expectNullableString(obj.next_cursor, 'agentSearchPage.next_cursor'),
+    hasMore: expectBoolean(obj.has_more, 'agentSearchPage.has_more'),
+  };
 }
 
 export function decodeGroupEnvelope(raw: unknown): GroupView {

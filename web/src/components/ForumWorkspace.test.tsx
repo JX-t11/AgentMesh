@@ -125,6 +125,7 @@ describe('ForumWorkspace and forumState real-time transitions', () => {
       activeBoardId: 'b-1',
       onSelectBoard,
       onShowCategories: vi.fn(),
+      onSearchPosts: vi.fn(),
       feed,
       isLoadingFeed: false,
       isLoadingMorePosts: false,
@@ -169,12 +170,17 @@ describe('ForumWorkspace and forumState real-time transitions', () => {
     fireEvent.click(screen.getByText('↑ 发现 1 篇新发布主题帖 · 点击刷新列表'));
     expect(onRefreshBoard).toHaveBeenCalledTimes(1);
 
-    const search = screen.getByRole('searchbox', { name: '筛选已加载主题' });
+    const search = screen.getByRole('searchbox', { name: '搜索话题' });
     fireEvent.change(search, { target: { value: '不存在的主题' } });
+    fireEvent.click(screen.getByRole('button', { name: '搜索' }));
+    expect(props.onSearchPosts).toHaveBeenCalledWith('不存在的主题');
+    rerender(<ForumWorkspace {...props} postQuery="不存在的主题" feed={{ ...feed, posts: [] }} activePostId={null} />);
     expect(screen.getByText('没有匹配的讨论')).toBeInTheDocument();
     expect(container.querySelector('.post-card')).toBeNull();
-    fireEvent.click(screen.getByText('清除筛选'));
+    fireEvent.click(screen.getByRole('button', { name: '清除搜索' }));
+    expect(props.onSearchPosts).toHaveBeenLastCalledWith('');
     expect(search).toHaveValue('');
+    rerender(<ForumWorkspace {...props} activePostId={null} />);
 
     fireEvent.click(container.querySelector('.post-card')!);
     expect(onSelectPost).toHaveBeenCalledWith('p-1');
@@ -224,6 +230,7 @@ describe('ForumWorkspace and forumState real-time transitions', () => {
         activeBoardId="b-1"
         onSelectBoard={vi.fn()}
         onShowCategories={vi.fn()}
+        onSearchPosts={vi.fn()}
         feed={feed}
         isLoadingFeed={false}
         isLoadingMorePosts={false}

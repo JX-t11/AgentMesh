@@ -27,6 +27,7 @@ const post = {
   created_at: '2026-11-16T02:00:00Z', last_activity_at: '2026-11-17T02:00:00Z',
 };
 const user = { id: 'u1', username: 'observer', display_name: '观察者', created_at: '2026-11-16T02:00:00Z' };
+const historicalPost = { ...post, id: 'historical', title: '早期讨论', content: '游标重连方案' };
 
 function setupHome({ empty = false, fail = '', restricted = false } = {}) {
   const sockets: HomeSocket[] = [];
@@ -42,6 +43,17 @@ function setupHome({ empty = false, fail = '', restricted = false } = {}) {
     if (failedPath && url.pathname === failedPath) return json({ error: { message: '暂时无法读取' } }, 503);
     if (url.pathname.endsWith('/health')) return json({ status: 'ok' });
     if (url.pathname === '/api/v1/agents') return json({ agents: empty ? [] : [agent] });
+    if (url.pathname === '/api/v1/agents/search') {
+      return json(url.searchParams.get('capability') === 'code' && !url.searchParams.has('cursor')
+        ? { agents: [agent], next_cursor: 'directory-2', has_more: true }
+        : { agents: url.searchParams.has('cursor') ? [{ ...agent, id: 'a2', slug: 'another', display_name: 'Another Agent' }] : [], next_cursor: null, has_more: false });
+    }
+    if (url.pathname === '/api/v1/agents/me') return authorized ? json({ agent }) : json({}, 401);
+    if (url.pathname === '/api/v1/agents/me/feed') {
+      if (!new Headers(init?.headers).get('Authorization')?.startsWith('Bearer amesh_')) return json({}, 401);
+      const more = url.searchParams.get('cursor') === 'feed-2';
+      return json({ board_id: null, posts: [{ ...post, id: more ? 'f2' : 'f1', title: more ? '更早的关注动态' : '私有关注动态' }], next_cursor: more ? null : 'feed-2', has_more: !more });
+    }
     if (url.pathname === '/api/v1/boards') return json({ boards: empty ? [] : [board, ...(restricted && authorized ? [{ ...board, id: 'b2', name: '成员专属分类', visibility: 'platform' }] : [])], hidden_platform_count: 0 });
     if (url.pathname === '/api/v1/groups') return json({ groups: empty ? [] : [group, ...(restricted && authorized ? [{ ...group, id: 'g2', name: '私密协作频道', visibility: 'private' }] : [])] });
     if (url.pathname.endsWith('/g1/messages')) return json({ group_id: 'g1', has_more: false, messages: [{
@@ -50,6 +62,9 @@ function setupHome({ empty = false, fail = '', restricted = false } = {}) {
     }] });
     if (url.pathname.endsWith('/g1/members')) return json({ group_id: 'g1', members: [] });
     if (url.pathname === '/api/v1/posts' || url.pathname === '/api/v1/boards/b1/posts') {
+      if (url.searchParams.get('q') === historicalPost.content) {
+        return json({ board_id: url.pathname.includes('/boards/') ? 'b1' : null, posts: [historicalPost], next_cursor: null, has_more: false });
+      }
       return json({ board_id: url.pathname.includes('/boards/') ? 'b1' : null, posts: [...(restricted && authorized ? [{ ...post, id: 'p2', board_id: 'b2', title: '成员专属讨论' }] : []), ...currentPosts], next_cursor: null, has_more: false });
     }
     if (url.pathname === '/api/v1/posts/p1') return json({ post });
@@ -74,7 +89,7 @@ function setupHome({ empty = false, fail = '', restricted = false } = {}) {
 }
 
 async function signInThroughConnect() {
-  fireEvent.click(screen.getByRole('button', { name: '接入 Agent' }));
+  fireEvent.click(screen.getByRole('button', { name: /人类账户管理/ }));
   const auth = screen.getByRole('dialog', { name: '平台账号认证' });
   fireEvent.change(within(auth).getByLabelText(/用户名/), { target: { value: 'observer' } });
   fireEvent.change(within(auth).getByLabelText(/密码/), { target: { value: 'observer-password' } });
@@ -111,25 +126,32 @@ describe('platform home orchestration', () => {
     fireEvent.click(within(screen.getByRole('dialog', { name: '平台账号认证' })).getByRole('button', { name: '取消' }));
     fireEvent.click(platform.getByRole('link', { name: '首页' }));
     await screen.findByRole('link', { name: post.title });
-    expect(within(screen.getByRole('region', { name: '从围观，到协作' })).getByRole('link', { name: '文档中心' })).toHaveAttribute('href', '/docs');
+    expect(within(screen.getByRole('region', { name: '接入你的 Agent' })).getByRole('link', { name: '文档中心' })).toHaveAttribute('href', '/docs');
     expect(app.sockets).toHaveLength(1);
   });
 
   it('separates home, forum, categories and topic return links, preserves history and focuses topic search', async () => {
     const app = setupHome();
     await screen.findByRole('link', { name: post.title });
-    expect(screen.getByRole('heading', { level: 1, name: '让 Agent 在这里交流与协作。' })).toHaveFocus();
-    expect(screen.getByRole('link', { name: '首页' })).toHaveAttribute('aria-current', 'page');
-    expect(app.requests.filter((url) => url.pathname === '/api/v1/posts').map((url) => url.searchParams.get('limit'))).toEqual(['6']);
-    fireEvent.click(screen.getByRole('link', { name: '浏览社区' }));
+    expect(screen.getByRole('heading', { level: 1, name: /让 Agent 在这里\s*交流与协作。/ })).toHaveFocus();
+    expect(screen.getByRole('link', { name: 'AgentMesh 首页' })).toHaveAttribute('aria-current', 'page');
+    const homeNav = within(screen.getByRole('navigation', { name: '首页导航' }));
+    expect(homeNav.getByRole('link', { name: '接入文档' })).toHaveAttribute('href', '/docs');
+    expect(homeNav.getByRole('link', { name: '社区广场' })).toHaveAttribute('href', '/forum');
+    expect(screen.queryByRole('complementary', { name: '平台导航' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '切换导航' })).not.toBeInTheDocument();
+    expect(app.requests.filter((url) => url.pathname === '/api/v1/posts').map((url) => url.searchParams.get('limit'))).toEqual(['3']);
+    fireEvent.click(screen.getByRole('link', { name: '进入社区' }));
     expect(window.location.pathname).toBe('/forum');
+    expect(screen.getByRole('navigation', { name: '观测工作区切换' })).toBeInTheDocument();
+    expect(screen.queryByRole('navigation', { name: '首页导航' })).not.toBeInTheDocument();
     await screen.findByRole('link', { name: post.title });
     fireEvent.click(screen.getByRole('button', { name: '最新发布' }));
     await waitFor(() => expect(app.requests.some((url) => url.searchParams.get('limit') === '25' && url.searchParams.get('sort') === 'newest')).toBe(true));
     fireEvent.click(screen.getByRole('link', { name: '首页' }));
     await screen.findByRole('link', { name: post.title });
     expect(app.requests.filter((url) => url.pathname === '/api/v1/posts').at(-1)?.searchParams.get('sort')).toBe('active');
-    fireEvent.click(screen.getByRole('link', { name: '浏览社区' }));
+    fireEvent.click(screen.getByRole('link', { name: '进入社区' }));
     expect(screen.getByRole('button', { name: '最新发布' })).toHaveAttribute('aria-pressed', 'true');
     fireEvent.click(screen.getByRole('button', { name: '搜索话题' }));
     expect(screen.getByRole('searchbox')).toHaveFocus();
@@ -155,7 +177,7 @@ describe('platform home orchestration', () => {
       window.history.back();
       await changed;
     });
-    await screen.findByRole('heading', { level: 1, name: '让 Agent 在这里交流与协作。' });
+    await screen.findByRole('heading', { level: 1, name: /让 Agent 在这里\s*交流与协作。/ });
     await act(async () => {
       const changed = new Promise((resolve) => window.addEventListener('popstate', resolve, { once: true }));
       window.history.forward();
@@ -183,14 +205,25 @@ describe('platform home orchestration', () => {
     expect(within(screen.getByRole('region', { name: '新加入 Agent' })).getByText(agent.display_name)).toBeInTheDocument();
   });
 
+  it('opens the onboarding fragment directly in the standalone page', async () => {
+    window.history.replaceState(null, '', '/#home-onboarding');
+    const app = setupHome();
+    expect(screen.getByRole('region', { name: '接入你的 Agent' })).toHaveFocus();
+    await screen.findByRole('link', { name: post.title });
+    expect(screen.getByRole('region', { name: '接入你的 Agent' })).toHaveFocus();
+    fireEvent.click(screen.getByRole('link', { name: 'AgentMesh 首页' }));
+    expect(window.location.hash).toBe('');
+    expect(app.sockets).toHaveLength(1);
+  });
+
   it('shows honest empty states and keeps discovery and onboarding usable', async () => {
     setupHome({ empty: true });
     await screen.findByText(/还没有讨论/);
     expect(screen.getByText(/暂时没有可浏览的分类/)).toBeInTheDocument();
     expect(screen.getByText(/还没有公开频道/)).toBeInTheDocument();
     expect(screen.getByText(/还没有可展示的 Agent/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '浏览社区' })).toHaveAttribute('href', '/forum');
-    expect(screen.getByRole('button', { name: '接入 Agent' })).toBeEnabled();
+    expect(screen.getByRole('link', { name: '进入社区' })).toHaveAttribute('href', '/forum');
+    expect(screen.getByRole('link', { name: '接入 Agent' })).toHaveAttribute('href', '#home-onboarding');
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
   });
 
@@ -207,7 +240,7 @@ describe('platform home orchestration', () => {
     fireEvent.click(screen.getByRole('button', { name: '刷新讨论' }));
     await screen.findByRole('link', { name: updatedPost.title });
     expect(screen.queryByRole('button', { name: '刷新讨论' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('link', { name: '浏览社区' }));
+    fireEvent.click(screen.getByRole('link', { name: '进入社区' }));
     expect(screen.getByRole('complementary', { name: '右下角实时聊天观察窗' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('link', { name: '首页' }));
     expect(screen.getByRole('complementary', { name: '右下角实时聊天观察窗' })).toBeInTheDocument();
@@ -263,7 +296,7 @@ describe('platform home orchestration', () => {
 
   it('does not resume cancelled onboarding after an ordinary account login', async () => {
     setupHome();
-    fireEvent.click(screen.getByRole('button', { name: '接入 Agent' }));
+    fireEvent.click(screen.getByRole('button', { name: /人类账户管理/ }));
     fireEvent.click(within(screen.getByRole('dialog', { name: '平台账号认证' })).getByRole('button', { name: '取消' }));
     fireEvent.click(screen.getByRole('button', { name: '注册 / 登录' }));
     const auth = screen.getByRole('dialog', { name: '平台账号认证' });
@@ -273,5 +306,51 @@ describe('platform home orchestration', () => {
     await screen.findByRole('button', { name: '退出 @observer' });
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(window.location.pathname).toBe('/');
+  });
+
+  it('opens autonomous registration and finds agents and historical topics on the server', async () => {
+    const app = setupHome();
+    await screen.findByRole('link', { name: post.title });
+    expect(app.requests.some((url) => url.pathname.endsWith('/agents/me/feed'))).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: /Agent 自主注册/ }));
+    const auth = within(screen.getByRole('dialog', { name: '平台账号认证' }));
+    expect(auth.getByRole('heading', { name: /Agent 直接注册/ })).toBeInTheDocument();
+    fireEvent.click(auth.getByRole('button', { name: '取消' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Hermes' }));
+    expect(screen.getByRole('link', { name: /查看 Hermes 接入指南/ })).toHaveAttribute('href', '/docs/hermes');
+
+    fireEvent.click(within(screen.getByRole('region', { name: '新加入 Agent' })).getByRole('button', { name: /Agent 名录/ }));
+    const directory = within(screen.getByRole('dialog', { name: 'Agent 名录' }));
+    fireEvent.change(directory.getByLabelText('能力标签'), { target: { value: 'code' } });
+    fireEvent.click(directory.getByRole('button', { name: '查找 Agent' }));
+    await directory.findByText(agent.display_name);
+    fireEvent.click(directory.getByRole('button', { name: '加载更多 Agent' }));
+    await directory.findByText('Another Agent');
+    expect(app.requests.at(-1)?.searchParams.get('cursor')).toBe('directory-2');
+    expect(app.requests.at(-1)?.searchParams.get('capability')).toBe('code');
+    fireEvent.click(directory.getByRole('button', { name: '关闭' }));
+
+    fireEvent.click(screen.getByRole('link', { name: '进入社区' }));
+    await screen.findByRole('link', { name: post.title });
+    fireEvent.change(screen.getByRole('searchbox', { name: '搜索话题' }), { target: { value: historicalPost.content } });
+    fireEvent.click(screen.getByRole('button', { name: '搜索' }));
+    await screen.findByRole('link', { name: historicalPost.title });
+    expect(app.requests.at(-1)?.searchParams.get('q')).toBe(historicalPost.content);
+    expect(screen.queryByRole('link', { name: post.title })).not.toBeInTheDocument();
+  });
+
+  it('pages a signed-in Agent following feed and removes it on sign out', async () => {
+    window.localStorage.setItem('agentmesh_user_session_v1', JSON.stringify({
+      kind: 'agent', token: 'amesh_home_test', agent: { ...agent, displayName: agent.display_name, createdAt: agent.created_at, isRevoked: false },
+    }));
+    const app = setupHome();
+    const following = within(await screen.findByRole('region', { name: '关注动态' }));
+    await following.findByRole('link', { name: '私有关注动态' });
+    fireEvent.click(following.getByRole('button', { name: '更多关注动态' }));
+    await following.findByRole('link', { name: '更早的关注动态' });
+    expect(app.requests.filter((url) => url.pathname.endsWith('/agents/me/feed')).map((url) => url.searchParams.get('cursor'))).toEqual([null, 'feed-2']);
+    fireEvent.click(screen.getByRole('button', { name: '退出接入 @claw-one' }));
+    await waitFor(() => expect(screen.queryByRole('region', { name: '关注动态' })).not.toBeInTheDocument());
+    expect(screen.queryByText('私有关注动态')).not.toBeInTheDocument();
   });
 });

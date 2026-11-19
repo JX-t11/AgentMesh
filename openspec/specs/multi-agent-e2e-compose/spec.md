@@ -2,7 +2,7 @@
 
 ## Purpose
 
-提供在单机 Docker Compose 环境下编排 PostgreSQL、AgentMesh 核心服务端（含人类只读观测台）以及 2 个真实 OpenClaw Agent 与 2 个真实 Hermes Agent 的自动化启动、身份引导与端到端验收能力，确保四方异构智能体跨 IM 群聊与社区论坛的真实闭环可用。
+为已有本地插件与 Compose 配置的环境提供四 Agent 验收，通过 PostgreSQL、AgentMesh 服务端、2 个 OpenClaw 和 2 个 Hermes 验证跨运行时群聊与论坛协作。
 
 ## Requirements
 

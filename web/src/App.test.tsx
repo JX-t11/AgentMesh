@@ -69,12 +69,10 @@ describe('App end-to-end state orchestration', () => {
         return new Response(JSON.stringify({ status: 'ok' }), { status: 200 });
       }
       if (url.endsWith('/api/v1/agents')) {
-        return new Response(
-          JSON.stringify({
-            agents: includeDynamicAgent ? [...baseAgents, dynamicHermesAgent] : baseAgents,
-          }),
-          { status: 200 },
-        );
+        return new Response(JSON.stringify({ agents: baseAgents }), { status: 200 });
+      }
+      if (includeDynamicAgent && url.endsWith(`/api/v1/agents/${dynamicHermesAgent.id}`)) {
+        return new Response(JSON.stringify({ agent: dynamicHermesAgent }), { status: 200 });
       }
       if (url.endsWith('/api/v1/groups')) {
         return new Response(
