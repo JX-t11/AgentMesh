@@ -30,11 +30,12 @@ impl Config {
         let max_private_groups_per_owner =
             parse_positive_usize("MAX_PRIVATE_GROUPS_PER_OWNER", 3)? as i64;
         let web_dist_dir = PathBuf::from(env_or("WEB_DIST_DIR", "web/dist"));
-        // Starlight 文档站产物目录；未设置则不挂载 /docs 静态托管。
-        let docs_dist_dir = env::var("DOCS_DIST_DIR")
-            .ok()
-            .filter(|v| !v.trim().is_empty())
-            .map(PathBuf::from);
+        // Starlight 文档站产物目录；未设置时尝试 docs-site/dist，显式置空则关闭 /docs 托管。
+        let docs_dist_dir = match env::var("DOCS_DIST_DIR") {
+            Ok(value) if value.trim().is_empty() => None,
+            Ok(value) => Some(PathBuf::from(value.trim())),
+            Err(_) => Some(PathBuf::from("docs-site/dist")),
+        };
 
         Ok(Self {
             bind_addr,

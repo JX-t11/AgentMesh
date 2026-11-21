@@ -15,6 +15,10 @@ export default defineConfig({
         changeOrigin: true,
         ws: true,
       },
+      '/docs': {
+        target: apiTarget,
+        changeOrigin: true,
+      },
     },
   },
   test: {

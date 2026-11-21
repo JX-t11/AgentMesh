@@ -167,9 +167,13 @@ pub fn build_router(state: AppState) -> Router {
 
     let mut router = Router::new().nest("/api", api_router);
 
-    // Starlight 文档站托管在 /docs 前缀下（DOCS_DIST_DIR 指向其构建产物）；
-    // 嵌套路由优先于 SPA fallback，未设置时 /docs 仍归 SPA。
-    if let Some(docs_dir) = state.docs_dist_dir.clone() {
+    // Starlight 文档站托管在 /docs 前缀下（DOCS_DIST_DIR 默认 docs-site/dist）；
+    // 仅当产物入口存在时挂载，否则 /docs 仍归 SPA。
+    let docs_dist_dir = state
+        .docs_dist_dir
+        .clone()
+        .filter(|dir| dir.join("index.html").is_file());
+    if let Some(docs_dir) = docs_dist_dir {
         tracing::info!(docs_dir = %docs_dir.display(), "serving Starlight docs static assets at /docs");
         // 旧文档地址由 SPA 工作区迁到 /docs/guides/*，显式路由避免被 nest_service 的兜底吞掉。
         for (legacy, canonical) in LEGACY_DOCS_REDIRECTS {
@@ -180,8 +184,10 @@ pub fn build_router(state: AppState) -> Router {
         }
         // axum nest_service 会剥掉 /docs 前缀，ServeDir 的目录重定向因此丢失前缀
         // （/docs/guides/x → /guides/x/，浏览器跟随后落入 SPA）。这里把前缀补回去。
+        // 未命中的文档路径返回 Starlight 的 404 页面，not_found_service 保留 404 状态码。
+        let not_found = ServeFile::new(docs_dir.join("404.html"));
         let docs = tower::util::MapResponse::new(
-            ServeDir::new(docs_dir),
+            ServeDir::new(docs_dir).not_found_service(not_found),
             |mut res: axum::response::Response<
                 tower_http::services::fs::ServeFileSystemResponseBody,
             >| {
@@ -201,6 +207,8 @@ pub fn build_router(state: AppState) -> Router {
             },
         );
         router = router.nest_service("/docs", docs);
+    } else if let Some(docs_dir) = state.docs_dist_dir.clone() {
+        tracing::warn!(docs_dir = %docs_dir.display(), "docs dist missing; /docs falls back to SPA");
     }
 
     if let Some(dist_dir) = web_dist_dir {

@@ -121,6 +121,11 @@ async fn serves_docs_site_with_prefix_preserving_redirects_and_legacy_urls() {
         "<!doctype html><html><body>OpenClaw Guide Shell</body></html>",
     )
     .expect("write guide index.html");
+    fs::write(
+        docs_dir.join("404.html"),
+        "<!doctype html><html><body>Docs Not Found Shell</body></html>",
+    )
+    .expect("write docs 404.html");
     fs::write(docs_dir.join("_astro/site.css"), "body{color:red}").expect("write docs asset");
 
     let app = TestApp::spawn_with_web_and_docs_dist(web_dir.clone(), docs_dir.clone()).await;
@@ -168,6 +173,18 @@ async fn serves_docs_site_with_prefix_preserving_redirects_and_legacy_urls() {
         .unwrap();
     assert_eq!(asset_resp.status(), 200);
     assert_eq!(asset_resp.text().await.unwrap(), "body{color:red}");
+
+    let missing_resp = http
+        .get(format!("{}/docs/guides/missing/", app.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing_resp.status(), 404);
+    assert!(missing_resp
+        .text()
+        .await
+        .unwrap()
+        .contains("Docs Not Found Shell"));
 
     let no_slash_resp = http
         .get(format!("{}/docs/guides/openclaw", app.base_url))

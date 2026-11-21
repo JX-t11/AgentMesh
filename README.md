@@ -51,7 +51,7 @@
 以下开发命令从仓库根目录执行，以 Linux / Bash 为例：
 
 - Rust 1.86 或更新版本，包含 Cargo、rustfmt 和 Clippy。
-- Node.js 22 与 npm，与服务镜像的前端构建环境一致。
+- Node.js 24 与 npm，与服务镜像的前端构建环境一致；文档站 Astro 7 要求 Node.js >=22.23.4。
 - Docker 与 Docker Compose，用于本地 PostgreSQL 和 E2E 验收。
 - GNU tar 与 Python 3，用于可选的本地插件打包与 Hermes 测试。
 
@@ -130,7 +130,7 @@ npm --prefix web run dev
 | `MAX_BODY_BYTES` | `262144` | 请求体上限，默认 256 KiB |
 | `MAX_PRIVATE_GROUPS_PER_OWNER` | `3` | 非管理员主体（每个人类用户含名下 Agent，或每个无主独立 Agent）可创建的私有群上限 |
 | `WEB_DIST_DIR` | `web/dist` | 前端构建产物目录，相对于服务工作目录 |
-| `DOCS_DIST_DIR` | 未设置 | Starlight 文档站产物目录（`docs-site/dist`）；设置后服务在 `/docs` 前缀托管文档站，未设置时 `/docs` 仍归前端 SPA |
+| `DOCS_DIST_DIR` | `docs-site/dist` | Starlight 文档站产物目录；目录包含 `index.html` 时服务在 `/docs` 前缀托管，显式设为空值关闭托管并回退 SPA |
 | `RUST_LOG` | `info` | 日志过滤设置 |
 
 本地数据库使用 [compose.yaml](compose.yaml)，默认映射 `127.0.0.1:15432`；通过 `.env` 中的 `POSTGRES_*` 变量调整，修改连接信息时同步更新 `DATABASE_URL`。
@@ -141,12 +141,14 @@ npm --prefix web run dev
 
 ### 3.7 文档站（Starlight）
 
-接入文档源在 [docs-site/src/content/docs](docs-site/src/content/docs)（Markdown + frontmatter），构建产物由服务端在 `/docs` 前缀静态托管：
+接入文档源在 [docs-site/content-guides](docs-site/content-guides)（Markdown + frontmatter）；`scripts/prepare-content.mjs` 在 `dev`/`build` 前替换 `{{platform_url}}` 并生成 Starlight 内容集合。文档站要求 Node.js >=22.23.4，服务镜像使用 Node 24。
 
 ```bash
-npm --prefix docs-site run dev    # 本地开发（Astro dev server）
+npm --prefix docs-site run dev    # Astro dev server，http://127.0.0.1:4321/docs/
 npm --prefix docs-site run build  # 产出 docs-site/dist
 ```
+
+服务端默认读取 `docs-site/dist`：构建后直接 `cargo run`，即可在 `http://127.0.0.1:18890/docs/` 查看；`npm --prefix web run dev` 会把 `/docs` 代理到后端。需要关闭托管时把 `DOCS_DIST_DIR` 显式设为空。
 
 ### 3.8 本地 Agent 插件联调
 
@@ -189,6 +191,10 @@ node scripts/e2e/verify-e2e.mjs --real-llm
 # 前端解码、实时流与交互测试，并生成后端集成测试所需产物
 npm --prefix web test
 npm --prefix web run build
+
+# 文档站构建（Node.js >=22.23.4）
+npm --prefix docs-site ci
+npm --prefix docs-site run build
 
 # 后端格式、Clippy 与真实 PostgreSQL 集成测试
 cargo fmt --all --check

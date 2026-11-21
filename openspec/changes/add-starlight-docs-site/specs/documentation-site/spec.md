@@ -22,7 +22,7 @@
 
 ### Requirement: Documentation hosting and route isolation
 
-服务端 MUST 仅在配置了文档构建产物目录时，将 `/docs` 前缀静态托管给文档站；页面请求 SHALL 返回目录中的 `index.html`，不带尾斜杠的指南地址 SHALL 重定向到带尾斜杠的地址，且重定向后的 `Location` MUST 保留 `/docs` 前缀。文档挂载 MUST NOT 改变 `/api` 的 JSON 404 行为；未配置文档目录时，`/docs` SHALL 继续由既有 SPA 回退处理。
+服务端 MUST 默认使用 `docs-site/dist` 作为文档产物目录；该目录包含 `index.html` 时，将 `/docs` 前缀静态托管给文档站。`DOCS_DIST_DIR` 显式设为空值或默认目录缺失时，`/docs` SHALL 继续由既有 SPA 回退处理。页面请求 SHALL 返回目录中的 `index.html`，不带尾斜杠的指南地址 SHALL 重定向到带尾斜杠的地址，且重定向后的 `Location` MUST 保留 `/docs` 前缀。文档挂载 MUST NOT 改变 `/api` 的 JSON 404 行为；未命中文档路径 MUST 返回状态码 404 的文档站错误页，而不是 SPA 入口。
 
 #### Scenario: Serve guides and assets with the prefix preserved
 
@@ -34,10 +34,53 @@
 - **WHEN** 文档产物目录已配置，客户端请求不存在的 `/api/v1/*` 地址
 - **THEN** 服务端返回 JSON 格式的 404，而不是文档站页面或文档站的纯文本 404
 
-#### Scenario: Fall back to the SPA when documentation is not configured
+#### Scenario: Fall back to the SPA when documentation is explicitly disabled
 
-- **WHEN** 未设置文档产物目录，访客请求 `/docs`
+- **WHEN** 设置 `DOCS_DIST_DIR=`，访客请求 `/docs`
 - **THEN** 服务端沿用既有 Web SPA 回退，不挂载文档站
+
+#### Scenario: Fall back when the default docs build is absent
+
+- **WHEN** 未设置 `DOCS_DIST_DIR`，且 `docs-site/dist/index.html` 不存在，访客请求 `/docs`
+- **THEN** 服务端不挂载文档站，沿用既有 Web SPA 回退
+
+### Requirement: Documentation site navigation, icon, and error page
+
+文档站 SHALL 在所有文档页提供返回平台首页的入口；站点 MUST 在 `/docs/favicon.svg` 提供图标，并由页面引用带 `/docs` 前缀的地址。未知文档路径 MUST 返回状态码 404 的 Starlight 错误页，页面 SHALL 提供返回文档首页与平台首页的链接。
+
+#### Scenario: Return to the platform from a guide
+
+- **WHEN** 访客在 `/docs/guides/openclaw/` 点击侧栏“返回平台”
+- **THEN** 浏览器导航到 `/`，即平台首页
+
+#### Scenario: Open a missing documentation path
+
+- **WHEN** 访客请求 `/docs/guides/not-found/`
+- **THEN** 服务端返回 404，响应体是 Starlight 的“页面未找到”页面，而不是 SPA 入口或纯文本错误
+
+#### Scenario: Load the documentation favicon
+
+- **WHEN** 浏览器请求 `/docs/favicon.svg`
+- **THEN** 服务端返回 200 的 SVG 图标
+
+### Requirement: Local development and declared toolchain
+
+`docs-site/package.json` MUST 声明 Astro 7 所需的 Node 最低版本 `>=22.23.4`，README 与 Docker 构建 SHALL 使用兼容版本。`DOCS_DIST_DIR` 未设置且 `docs-site/dist` 存在时，本地服务 MUST 默认在 `/docs` 托管文档；显式空值 MUST 关闭托管。平台 Vite 开发服务器 SHALL 将 `/docs` 代理到后端，使热更新页面可以访问同一文档站。
+
+#### Scenario: Run the server after building docs without extra configuration
+
+- **WHEN** 维护者运行 `npm --prefix docs-site run build` 后，在未设置 `DOCS_DIST_DIR` 的情况下启动服务并访问 `/docs/`
+- **THEN** 服务端返回文档首页，而不是 SPA 入口
+
+#### Scenario: Access docs through the Vite dev server
+
+- **WHEN** 后端已启动且 `npm --prefix web run dev` 正在运行，访客访问 Vite 端口的 `/docs/guides/openclaw/`
+- **THEN** 请求被代理到后端，返回文档指南 HTML
+
+#### Scenario: Disable docs hosting explicitly
+
+- **WHEN** 维护者设置 `DOCS_DIST_DIR=` 并启动服务，访问 `/docs`
+- **THEN** 服务端不挂载文档站，返回既有 SPA
 
 ### Requirement: Legacy documentation URLs remain reachable
 

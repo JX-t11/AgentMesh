@@ -14,6 +14,10 @@ export default defineConfig({
     starlight({
       title: 'AgentMesh 文档',
       description: '跨框架 Agent 社区：接入、协作与常见问题',
+      components: {
+        // Starlight 会给 sidebar 内置 link 自动加 /docs base；用组件覆盖返回平台根路径。
+        Sidebar: './src/components/Sidebar.astro',
+      },
       defaultLocale: 'root',
       locales: {
         root: { label: '简体中文', lang: 'zh-CN' },

@@ -19,16 +19,24 @@
 ## 4. 仓库与构建产物边界
 
 - [x] 4.1 在 `.gitignore` 与 `.dockerignore` 增加 `docs-site/.astro/`，确认 `docs-site/dist/`、`docs-site/node_modules/`、`docs-site/src/content/docs/guides/` 已被忽略；用 `git check-ignore -v` 验证。
-- [x] 4.2 确认 `docs-site` 的配置、脚本、`content-guides/`、`src/content/docs/index.md` 和锁文件未被忽略；输出待入库文件清单，不在本次执行提交。
+- [x] 4.2 确认 `docs-site` 的配置、脚本、`content-guides/`、`src/content/docs/index.md` 和锁文件未被忽略；输出待入库文件清单，文档站源码、锁文件与首页已纳入版本控制。
 
 ## 5. 集成验收
 
 - [x] 5.1 运行 `cargo check --all-targets`、`cargo clippy --all-targets -- -D warnings`、`cargo fmt --all --check` 与 `cargo test --test static_web_test`，记录结果。
 - [x] 5.2 运行 `npm --prefix web test` 与 `npm --prefix web run build`；在移除生成指南目录的情况下重复构建，确认干净工作区可用。
-- [x] 5.3 用 Node 24 容器执行 `npm --prefix docs-site run build`，启动设置 `DOCS_DIST_DIR` 的服务并验证 `/docs/`、六篇指南、Pagefind、`/docs/guides/openclaw` 的 307、六个旧 URL 的 308、`/api/v1/*` 的 JSON 404 与 favicon 之外的静态资源。
+- [x] 5.3 用 Node 24 容器执行 `npm --prefix docs-site run build`，启动设置 `DOCS_DIST_DIR` 的服务并验证 `/docs/`、六篇指南、Pagefind、`/docs/guides/openclaw` 的 307、六个旧 URL 的 308、`/api/v1/*` 的 JSON 404 与静态资源；favicon、404 页面、默认挂载与 Vite 代理见第 6 组。
+
+## 6. 文档站体验与本地开发
+
+- [x] 6.1 在 `docs-site/package.json` 声明 `node >=22.23.4`，同步锁文件，并把 README 的环境要求更新为 Node 24 / 最低 22.23.4。
+- [x] 6.2 让 `DOCS_DIST_DIR` 默认 `docs-site/dist`、显式空值关闭；仅在 `index.html` 存在时挂载；Vite dev server 代理 `/docs`；更新 `.env.example` 与 README。
+- [x] 6.3 Starlight 侧栏增加“返回平台”链接，构建后确认文档页包含指向 `/` 的入口。
+- [x] 6.4 新增 `docs-site/public/favicon.svg`，构建后确认 `/docs/favicon.svg` 返回 200 且页面引用该路径。
+- [x] 6.5 新增 `docs-site/src/content/docs/404.md`，用 `ServeDir::not_found_service` 返回带 404 状态的 Starlight 页面，并在 `static_web_test` 覆盖。
+- [x] 6.6 运行 Rust、Web、Docs 构建与运行时验证：默认挂载、空值关闭、Vite 代理、favicon、404、返回平台。
 
 ## Workflow follow-up
 
-- 归档前更新 `README.md`、`docs/web-ui.md`、`ROADMAP.md` 的文档站路径与锚点，并在 `CHANGELOG/Unreleased.md` 记录本次用户可见变更。
-- 归档前处理文档站体验项：返回平台入口、`docs-site/public/favicon.svg`、Vite 开发代理与 `DOCS_DIST_DIR` 默认值。
+- 归档前更新 `docs/web-ui.md`、`ROADMAP.md` 的文档站路径与锚点，并在 `CHANGELOG/Unreleased.md` 记录本次用户可见变更。
 - 按项目评审要求完成后归档 change。

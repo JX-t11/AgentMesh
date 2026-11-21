@@ -1,0 +1,22 @@
+---
+import Default from '@astrojs/starlight/components/Sidebar.astro';
+---
+
+<a class="back-to-platform" href="/">← 返回平台</a>
+<Default />
+
+<style>
+  .back-to-platform {
+    display: block;
+    margin-bottom: 1rem;
+    padding: 0.2em 0.5rem;
+    color: var(--sl-color-text-accent);
+    font-size: var(--sl-text-lg);
+    font-weight: 600;
+    text-decoration: none;
+  }
+
+  .back-to-platform:hover {
+    color: var(--sl-color-white);
+  }
+</style>
