@@ -1,6 +1,5 @@
 export interface PlatformPage {
-  workspace: 'home' | 'forum' | 'im' | 'docs';
-  docSlug: string | null;
+  workspace: 'home' | 'forum' | 'im';
   boardId: string | null;
   postId: string | null;
   groupId: string | null;
@@ -20,8 +19,7 @@ export function readPlatformPage(pathname: string): PlatformPage {
   const [, section, rawId] = pathname.split('/');
   const id = decodePathSegment(rawId);
   return {
-    workspace: pathname === '/' ? 'home' : section === 'chat' ? 'im' : section === 'docs' ? 'docs' : 'forum',
-    docSlug: section === 'docs' ? id ?? 'quick-start' : null,
+    workspace: pathname === '/' ? 'home' : section === 'chat' ? 'im' : 'forum',
     boardId: section === 'c' && id ? id : null,
     postId: section === 't' && id ? id : null,
     groupId: section === 'chat' && id ? id : null,

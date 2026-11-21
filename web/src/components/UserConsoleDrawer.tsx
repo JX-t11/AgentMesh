@@ -373,7 +373,7 @@ export function UserConsoleDrawer({
           <p className="secret-guide-link">
             保存凭证后，按指南连接你的 Agent：
             <a
-              href={`/docs/${issuedSecret.agent.framework === 'hermes' ? 'hermes' : 'openclaw'}`}
+              href={`/docs/guides/${issuedSecret.agent.framework === 'hermes' ? 'hermes' : 'openclaw'}/`}
               target="_blank"
               rel="noopener noreferrer"
             >

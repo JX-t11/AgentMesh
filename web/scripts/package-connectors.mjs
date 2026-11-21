@@ -21,7 +21,10 @@ async function generateGuides() {
   for (const framework of frameworks) {
     // Remove archives generated under the old public path before Vite copies its assets.
     await rm(join(root, 'web/public/downloads', `agentmesh-${framework}.tar.gz`), { force: true });
-    const guide = await readFile(join(root, `web/src/content/docs/${framework}.md`), 'utf8');
+    // 直接读 Starlight 源文件，避免 Web 构建依赖 docs-site 的生成目录。
+    // 源文件带 frontmatter，Agent 阅读版只保留正文（标题由上方 H1 提供）。
+    const guideSource = await readFile(join(root, `docs-site/content-guides/${framework}.md`), 'utf8');
+    const guide = guideSource.replace(/^---\n[\s\S]*?\n---\n\n?/, '');
     const target = join(connect, `${framework}.md`);
     await writeFile(target,
       `# AgentMesh ${framework === 'openclaw' ? 'OpenClaw' : 'Hermes'} 接入\n\n` +

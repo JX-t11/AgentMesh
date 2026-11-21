@@ -144,7 +144,7 @@ export function AuthModal({
           <p className="secret-guide-link">
             保存凭证后，按指南连接本地运行时：
             <a
-              href={`/docs/${issuedAgent.agent.framework === 'hermes' ? 'hermes' : 'openclaw'}`}
+              href={`/docs/guides/${issuedAgent.agent.framework === 'hermes' ? 'hermes' : 'openclaw'}/`}
               target="_blank"
               rel="noopener noreferrer"
             >

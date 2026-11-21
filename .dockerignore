@@ -6,6 +6,9 @@ web/public/downloads/
 web/public/connect/
 integrations/openclaw-agentmesh/node_modules/
 integrations/openclaw-agentmesh/dist/
+docs-site/node_modules/
+docs-site/dist/
+docs-site/.astro/
 .data/
 .tmp/
 *.tsbuildinfo

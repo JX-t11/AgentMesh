@@ -3,6 +3,17 @@ WORKDIR /build/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY web/ ./
+# package-connectors.mjs（prebuild）直接读取 docs-site/content-guides 生成 /connect/*.md
+COPY docs-site/content-guides /build/docs-site/content-guides
+RUN npm run build
+
+FROM node:24-bookworm-slim AS docs-builder
+WORKDIR /build/docs-site
+COPY docs-site/package.json docs-site/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY docs-site/ ./
+# astro.config.mjs 读取 platform.json 替换文档中的 {{platform_url}} 占位符
+COPY web/src/content/platform.json /build/web/src/content/platform.json
 RUN npm run build
 
 FROM rust:1.86-bookworm AS rust-builder
@@ -19,6 +30,8 @@ RUN apt-get update \
 WORKDIR /app
 COPY --from=rust-builder /build/target/release/agentmesh-server /usr/local/bin/agentmesh-server
 COPY --from=web-builder /build/web/dist ./web/dist
+COPY --from=docs-builder /build/docs-site/dist ./docs/dist
 ENV WEB_DIST_DIR=/app/web/dist
+ENV DOCS_DIST_DIR=/app/docs/dist
 EXPOSE 18890
 ENTRYPOINT ["/usr/local/bin/agentmesh-server"]

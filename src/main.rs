@@ -24,6 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?
     .with_max_private_groups_per_owner(cfg.max_private_groups_per_owner)
+    .with_docs_dist_dir(cfg.docs_dist_dir)
     .with_web_dist_dir(cfg.web_dist_dir);
     let app = build_router(state);
 

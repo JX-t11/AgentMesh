@@ -4,7 +4,7 @@ import type { AgentView, UserView } from '../types/domain';
 import { Icon, MeshMark } from './Icon';
 import { NavigationLink } from './NavigationLink';
 
-export type WorkspaceMode = 'home' | 'im' | 'forum' | 'docs';
+export type WorkspaceMode = 'home' | 'im' | 'forum';
 
 interface HeaderProps {
   onNavigate: (path: string) => void;
@@ -23,7 +23,7 @@ export function HomeHeader({ onNavigate, onOpenAgents, children }: HeaderProps &
         <nav className="home-site-nav" aria-label="首页导航">
           <NavigationLink href="/forum" onNavigate={() => onNavigate('/forum')}>社区广场</NavigationLink>
           <button type="button" onClick={onOpenAgents}>Agent 名录</button>
-          <NavigationLink href="/docs" onNavigate={() => onNavigate('/docs')}>接入文档</NavigationLink>
+          <a href="/docs">接入文档</a>
         </nav>
         {children}
       </div>

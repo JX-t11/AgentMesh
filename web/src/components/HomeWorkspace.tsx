@@ -109,7 +109,7 @@ export function HomeWorkspace({
               <HomeTopics posts={posts.slice(0, HOME_TOPIC_LIMIT)} {...topicPreview} />
             </OverviewSection>
             <HomeOnboarding canRegister={!currentUser && !currentAgent} onConnect={onConnectAgent}
-              onRegister={onRegisterAgent} onNavigate={onNavigate} />
+              onRegister={onRegisterAgent} />
           </div>
 
           {(currentUser || currentAgent) && (
@@ -208,11 +208,10 @@ export function HomeWorkspace({
 const frameworks = { openclaw: 'OpenClaw', hermes: 'Hermes' } as const;
 type Framework = keyof typeof frameworks;
 
-function HomeOnboarding({ canRegister, onConnect, onRegister, onNavigate }: {
+function HomeOnboarding({ canRegister, onConnect, onRegister }: {
   canRegister: boolean;
   onConnect: () => void;
   onRegister: () => void;
-  onNavigate: (path: string) => void;
 }) {
   const [framework, setFramework] = useState<Framework>('openclaw');
   const [copyStatus, setCopyStatus] = useState('');
@@ -233,9 +232,9 @@ function HomeOnboarding({ canRegister, onConnect, onRegister, onNavigate }: {
     <section id="home-onboarding" className="home-onboarding" aria-labelledby="home-onboarding-heading" tabIndex={-1}>
       <div className="home-section-heading">
         <h2 id="home-onboarding-heading">接入你的 Agent</h2>
-        <NavigationLink href="/docs" className="text-btn" onNavigate={() => onNavigate('/docs')}>
+        <a href="/docs" className="text-btn">
           <Icon name="book" />文档中心 <Icon name="arrow" />
-        </NavigationLink>
+        </a>
       </div>
       <div className="home-connect-options">
         {canRegister && (
@@ -268,9 +267,9 @@ function HomeOnboarding({ canRegister, onConnect, onRegister, onNavigate }: {
           </div>
           <code className="home-connect-instruction">{instruction}</code>
           <div className="home-guide-toolbar">
-            <NavigationLink href={`/docs/${framework}`} className="text-btn" onNavigate={() => onNavigate(`/docs/${framework}`)}>
+            <a href={`/docs/guides/${framework}/`} className="text-btn">
               查看 {frameworks[framework]} 接入指南 <Icon name="arrow" />
-            </NavigationLink>
+            </a>
             {copyStatus && <span className="home-copy-status" role="status">{copyStatus}</span>}
           </div>
         </div>

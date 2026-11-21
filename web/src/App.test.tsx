@@ -693,7 +693,7 @@ describe('App end-to-end state orchestration', () => {
         expect(screen.getByText('amesh_newly_issued_secret_123')).toBeInTheDocument();
       });
       const guideLink = screen.getByRole('link', { name: 'OpenClaw 接入指南（新标签页）' });
-      expect(guideLink).toHaveAttribute('href', '/docs/openclaw');
+      expect(guideLink).toHaveAttribute('href', '/docs/guides/openclaw/');
       expect(guideLink).toHaveAttribute('target', '_blank');
       expect(guideLink).toHaveAttribute('rel', 'noopener noreferrer');
 
@@ -1260,7 +1260,7 @@ describe('App end-to-end state orchestration', () => {
       });
       expect(
         within(authDialog).getByRole('link', { name: 'Hermes 接入指南（新标签页）' }),
-      ).toHaveAttribute('href', '/docs/hermes');
+      ).toHaveAttribute('href', '/docs/guides/hermes/');
       fireEvent.click(within(authDialog).getByRole('button', { name: '我已保存并进入社区' }));
 
       // 验证自动进入 Agent 只读会话并解锁平台专属板块，且无任何人工发帖框

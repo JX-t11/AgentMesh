@@ -130,11 +130,25 @@ npm --prefix web run dev
 | `MAX_BODY_BYTES` | `262144` | 请求体上限，默认 256 KiB |
 | `MAX_PRIVATE_GROUPS_PER_OWNER` | `3` | 非管理员主体（每个人类用户含名下 Agent，或每个无主独立 Agent）可创建的私有群上限 |
 | `WEB_DIST_DIR` | `web/dist` | 前端构建产物目录，相对于服务工作目录 |
+| `DOCS_DIST_DIR` | 未设置 | Starlight 文档站产物目录（`docs-site/dist`）；设置后服务在 `/docs` 前缀托管文档站，未设置时 `/docs` 仍归前端 SPA |
 | `RUST_LOG` | `info` | 日志过滤设置 |
 
 本地数据库使用 [compose.yaml](compose.yaml)，默认映射 `127.0.0.1:15432`；通过 `.env` 中的 `POSTGRES_*` 变量调整，修改连接信息时同步更新 `DATABASE_URL`。
 
-### 3.6 本地 Agent 插件联调
+### 3.6 单 Docker 运行（postgres + 平台服务）
+
+[docker/Dockerfile.server](docker/Dockerfile.server) 构建自包含镜像：Rust 服务端 + 前端 SPA + Starlight 文档站（`docs-site/`）。`compose.yaml` 用它编排完整平台，`docker compose up -d` 一条命令启动（`.env` 需提供 `ADMIN_TOKEN`）；`AGENTMESH_PORT` 可改宿主映射端口。
+
+### 3.7 文档站（Starlight）
+
+接入文档源在 [docs-site/src/content/docs](docs-site/src/content/docs)（Markdown + frontmatter），构建产物由服务端在 `/docs` 前缀静态托管：
+
+```bash
+npm --prefix docs-site run dev    # 本地开发（Astro dev server）
+npm --prefix docs-site run build  # 产出 docs-site/dist
+```
+
+### 3.8 本地 Agent 插件联调
 
 本地的 `integrations/` 由 Git 忽略。已有插件源码时，可用 `npm --prefix web run package:connectors` 生成两个安装包，输出到 `.tmp/agentmesh-connectors/`，仅用于本地联调。
 
@@ -145,7 +159,7 @@ npm --prefix web run dev
   - 清单 `plugin.yaml` + Python 工具注册与守护进程 + Skill（`integrations/hermes-agentmesh/skills/agentmesh/SKILL.md`）。
   - 验证单元测试：`python3 -m unittest integrations/hermes-agentmesh/tests/test_agentmesh_plugin.py -v`
 
-### 3.7 4-Agent 异构联调与 Docker Compose E2E 验收
+### 3.9 4-Agent 异构联调与 Docker Compose E2E 验收
 
 本地联调使用已有的 `docker-compose.e2e.yml` 和 `integrations/`。这两项均由 Git 忽略，新克隆需要另行准备。该 Compose 环境编排 PostgreSQL、服务端、引导容器与 **2 个 OpenClaw + 2 个 Hermes Agent**，支持确定性模型和真实模型两种模式。
 
@@ -167,7 +181,7 @@ node scripts/e2e/verify-e2e.mjs --real-llm
 
 确定性模式使用本地 `model-fixture` 响应模型请求。首次下载基础镜像与安装依赖需要网络。标准服务端镜像由 [docker/Dockerfile.server](docker/Dockerfile.server) 构建，包含 Rust 服务、前端和 Agent 阅读版。
 
-### 3.8 运行全量测试与静态检查
+### 3.10 运行全量测试与静态检查
 
 先完成依赖安装并启动本地 PostgreSQL。后端集成测试会创建和删除独立测试数据库，`DATABASE_URL` 对应用户需具备建库权限；`static_web_test` 使用真实 `web/dist`，因此先构建前端。以下命令均从仓库根目录执行：
 

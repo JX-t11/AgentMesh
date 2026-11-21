@@ -101,33 +101,14 @@ beforeEach(() => { window.localStorage.clear(); window.history.replaceState(null
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); window.localStorage.clear(); window.history.replaceState(null, '', '/'); });
 
 describe('platform home orchestration', () => {
-  it('opens documentation without loading the forum, preserves history and reuses the chat connection', async () => {
-    window.history.replaceState(null, '', '/docs');
-    const app = setupHome();
-    expect(screen.getByRole('heading', { level: 1, name: '快速开始' })).toHaveFocus();
-    const platform = within(screen.getByRole('navigation', { name: '观测工作区切换' }));
-    expect(platform.getByRole('link', { name: '文档中心' })).toHaveAttribute('aria-current', 'page');
-    fireEvent.click(screen.getByRole('link', { name: 'OpenClaw 接入' }));
-    expect(window.location.pathname).toBe('/docs/openclaw');
-    expect(screen.getByRole('heading', { level: 1, name: 'OpenClaw 接入' })).toHaveFocus();
-    expect(document.title).toBe('OpenClaw 接入 · 文档中心 · AgentMesh');
-    expect(app.requests.some((url) => url.pathname === '/api/v1/posts')).toBe(false);
-    fireEvent.click(screen.getByRole('button', { name: '展开实时聊天浮窗' }));
-    await screen.findByText('频道初始消息');
-    await act(async () => {
-      const changed = new Promise((resolve) => window.addEventListener('popstate', resolve, { once: true }));
-      window.history.back();
-      await changed;
-    });
-    expect(screen.getByRole('heading', { level: 1, name: '快速开始' })).toHaveFocus();
-    expect(screen.getByRole('complementary', { name: '右下角实时聊天观察窗' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '接入我的 Agent' }));
-    expect(screen.getByRole('dialog', { name: '平台账号认证' })).toBeInTheDocument();
-    fireEvent.click(within(screen.getByRole('dialog', { name: '平台账号认证' })).getByRole('button', { name: '取消' }));
-    fireEvent.click(platform.getByRole('link', { name: '首页' }));
+  it('exposes documentation as plain links served by the standalone docs site at /docs', async () => {
+    setupHome();
     await screen.findByRole('link', { name: post.title });
-    expect(within(screen.getByRole('region', { name: '接入你的 Agent' })).getByRole('link', { name: '文档中心' })).toHaveAttribute('href', '/docs');
-    expect(app.sockets).toHaveLength(1);
+    const homeNav = within(screen.getByRole('navigation', { name: '首页导航' }));
+    expect(homeNav.getByRole('link', { name: '接入文档' })).toHaveAttribute('href', '/docs');
+    const onboarding = within(screen.getByRole('region', { name: '接入你的 Agent' }));
+    expect(onboarding.getByRole('link', { name: '文档中心' })).toHaveAttribute('href', '/docs');
+    expect(onboarding.getByRole('link', { name: /查看 OpenClaw 接入指南/ })).toHaveAttribute('href', '/docs/guides/openclaw/');
   });
 
   it('separates home, forum, categories and topic return links, preserves history and focuses topic search', async () => {
@@ -317,7 +298,7 @@ describe('platform home orchestration', () => {
     expect(auth.getByRole('heading', { name: /Agent 直接注册/ })).toBeInTheDocument();
     fireEvent.click(auth.getByRole('button', { name: '取消' }));
     fireEvent.click(screen.getByRole('button', { name: 'Hermes' }));
-    expect(screen.getByRole('link', { name: /查看 Hermes 接入指南/ })).toHaveAttribute('href', '/docs/hermes');
+    expect(screen.getByRole('link', { name: /查看 Hermes 接入指南/ })).toHaveAttribute('href', '/docs/guides/hermes/');
 
     fireEvent.click(within(screen.getByRole('region', { name: '新加入 Agent' })).getByRole('button', { name: /Agent 名录/ }));
     const directory = within(screen.getByRole('dialog', { name: 'Agent 名录' }));

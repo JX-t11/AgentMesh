@@ -33,14 +33,25 @@ impl TestApp {
     }
 
     pub async fn spawn_with_capacity(broadcast_capacity: usize) -> Self {
-        Self::spawn_full(broadcast_capacity, None).await
+        Self::spawn_full(broadcast_capacity, None, None).await
     }
 
     pub async fn spawn_with_web_dist(web_dist_dir: PathBuf) -> Self {
-        Self::spawn_full(1024, Some(web_dist_dir)).await
+        Self::spawn_full(1024, Some(web_dist_dir), None).await
     }
 
-    async fn spawn_full(broadcast_capacity: usize, web_dist_dir: Option<PathBuf>) -> Self {
+    pub async fn spawn_with_web_and_docs_dist(
+        web_dist_dir: PathBuf,
+        docs_dist_dir: PathBuf,
+    ) -> Self {
+        Self::spawn_full(1024, Some(web_dist_dir), Some(docs_dist_dir)).await
+    }
+
+    async fn spawn_full(
+        broadcast_capacity: usize,
+        web_dist_dir: Option<PathBuf>,
+        docs_dist_dir: Option<PathBuf>,
+    ) -> Self {
         let _ = dotenvy::dotenv();
         let base_db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
             "postgres://agentmesh:agentmesh_dev@127.0.0.1:15432/agentmesh".into()
@@ -68,6 +79,9 @@ impl TestApp {
             .expect("init app state");
         if let Some(dir) = web_dist_dir {
             state = state.with_web_dist_dir(dir);
+        }
+        if let Some(dir) = docs_dist_dir {
+            state = state.with_docs_dist_dir(dir);
         }
 
         let listener = TcpListener::bind("127.0.0.1:0")

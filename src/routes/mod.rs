@@ -8,6 +8,8 @@ mod social;
 pub mod ws;
 
 use axum::extract::DefaultBodyLimit;
+use axum::http::header;
+use axum::response::Redirect;
 use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -21,6 +23,15 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::state::AppState;
+
+const LEGACY_DOCS_REDIRECTS: [(&str, &str); 6] = [
+    ("/docs/quick-start", "/docs/guides/quick-start/"),
+    ("/docs/create-agent", "/docs/guides/create-agent/"),
+    ("/docs/openclaw", "/docs/guides/openclaw/"),
+    ("/docs/hermes", "/docs/guides/hermes/"),
+    ("/docs/collaboration", "/docs/guides/collaboration/"),
+    ("/docs/faq", "/docs/guides/faq/"),
+];
 
 pub fn build_router(state: AppState) -> Router {
     let max_body = state.max_body_bytes;
@@ -155,6 +166,42 @@ pub fn build_router(state: AppState) -> Router {
         .fallback(api_not_found);
 
     let mut router = Router::new().nest("/api", api_router);
+
+    // Starlight 文档站托管在 /docs 前缀下（DOCS_DIST_DIR 指向其构建产物）；
+    // 嵌套路由优先于 SPA fallback，未设置时 /docs 仍归 SPA。
+    if let Some(docs_dir) = state.docs_dist_dir.clone() {
+        tracing::info!(docs_dir = %docs_dir.display(), "serving Starlight docs static assets at /docs");
+        // 旧文档地址由 SPA 工作区迁到 /docs/guides/*，显式路由避免被 nest_service 的兜底吞掉。
+        for (legacy, canonical) in LEGACY_DOCS_REDIRECTS {
+            router = router.route(
+                legacy,
+                get(move || async move { Redirect::permanent(canonical) }),
+            );
+        }
+        // axum nest_service 会剥掉 /docs 前缀，ServeDir 的目录重定向因此丢失前缀
+        // （/docs/guides/x → /guides/x/，浏览器跟随后落入 SPA）。这里把前缀补回去。
+        let docs = tower::util::MapResponse::new(
+            ServeDir::new(docs_dir),
+            |mut res: axum::response::Response<
+                tower_http::services::fs::ServeFileSystemResponseBody,
+            >| {
+                if res.status().is_redirection() {
+                    if let Some(loc) = res.headers().get(header::LOCATION).cloned() {
+                        let loc = loc.to_str().unwrap_or_default().to_owned();
+                        if loc.starts_with('/') && !loc.starts_with("/docs") {
+                            if let Ok(value) =
+                                header::HeaderValue::from_str(&format!("/docs{}", loc))
+                            {
+                                res.headers_mut().insert(header::LOCATION, value);
+                            }
+                        }
+                    }
+                }
+                res
+            },
+        );
+        router = router.nest_service("/docs", docs);
+    }
 
     if let Some(dist_dir) = web_dist_dir {
         let index_file = dist_dir.join("index.html");

@@ -6,7 +6,6 @@ import { AgentProfileDialog } from './components/AgentProfileDialog';
 import { AuthModal, type AuthModalMode } from './components/AuthModal';
 import { ChatDrawer } from './components/ChatDrawer';
 import { Dialog } from './components/Dialog';
-import { DocsWorkspace } from './components/DocsWorkspace';
 import { ForumWorkspace } from './components/ForumWorkspace';
 import { HOME_TOPIC_LIMIT, HomeWorkspace, type PreviewStatus } from './components/HomeWorkspace';
 import { ImWorkspace } from './components/ImWorkspace';
@@ -139,7 +138,6 @@ export function App({ apiClient, socketOptions }: AppProps = {}) {
   const [dmSessions, setDmSessions] = useState<DmSessionView[]>([]);
 
   const [workspace, setWorkspace] = useState<WorkspaceMode>(initialPage.workspace);
-  const [docSlug, setDocSlug] = useState(initialPage.docSlug);
   const [forumView, setForumView] = useState(initialPage.forumView);
   const [isCompactLayout, setIsCompactLayout] = useState(() => window.innerWidth <= 900);
   const [isNavigationOpen, setIsNavigationOpen] = useState(() => window.innerWidth > 900);
@@ -214,7 +212,6 @@ export function App({ apiClient, socketOptions }: AppProps = {}) {
   const applyLocation = useCallback((pathname: string) => {
     const page = readPlatformPage(pathname);
     setWorkspace(page.workspace);
-    setDocSlug(page.docSlug);
     setForumView(page.forumView);
     setActiveBoardId(page.boardId);
     setActivePostId(page.postId);
@@ -1083,7 +1080,6 @@ export function App({ apiClient, socketOptions }: AppProps = {}) {
     <PlatformSidebar
       page={{
         workspace,
-        docSlug,
         boardId: activeBoardId,
         postId: activePostId,
         groupId: workspace === 'im' ? activeGroupId : null,
@@ -1213,8 +1209,6 @@ export function App({ apiClient, socketOptions }: AppProps = {}) {
           onInspectAgent={setInspectedAgentId}
           onUnknownAgent={handleUnknownAgent}
         />
-      ) : workspace === 'docs' ? (
-        <DocsWorkspace slug={docSlug} onNavigate={navigateTo} onConnectAgent={connectAgent} />
       ) : workspace === 'im' ? (
         <ImWorkspace
           showSidebar={false}

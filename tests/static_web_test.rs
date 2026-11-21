@@ -57,8 +57,7 @@ async fn serves_observer_spa_and_isolates_api_404_when_dist_exists() {
         "/chat",
         "/chat/example-group",
         "/docs",
-        "/docs/openclaw",
-        "/docs/hermes",
+        "/docs/guides/openclaw/",
     ] {
         let spa_resp = app
             .client
@@ -98,6 +97,127 @@ async fn serves_observer_spa_and_isolates_api_404_when_dist_exists() {
 
     app.cleanup().await;
     let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[tokio::test]
+async fn serves_docs_site_with_prefix_preserving_redirects_and_legacy_urls() {
+    let web_dir = std::env::temp_dir().join(format!("agentmesh_docs_web_{}", Uuid::new_v4()));
+    let docs_dir = std::env::temp_dir().join(format!("agentmesh_docs_dist_{}", Uuid::new_v4()));
+    fs::create_dir_all(&web_dir).expect("create web dist dir");
+    fs::create_dir_all(docs_dir.join("_astro")).expect("create docs asset dir");
+    fs::create_dir_all(docs_dir.join("guides/openclaw")).expect("create docs guide dir");
+    fs::write(
+        web_dir.join("index.html"),
+        "<!doctype html><html><body>AgentMesh Web Shell</body></html>",
+    )
+    .expect("write web index.html");
+    fs::write(
+        docs_dir.join("index.html"),
+        "<!doctype html><html><body>AgentMesh Docs Shell</body></html>",
+    )
+    .expect("write docs index.html");
+    fs::write(
+        docs_dir.join("guides/openclaw/index.html"),
+        "<!doctype html><html><body>OpenClaw Guide Shell</body></html>",
+    )
+    .expect("write guide index.html");
+    fs::write(docs_dir.join("_astro/site.css"), "body{color:red}").expect("write docs asset");
+
+    let app = TestApp::spawn_with_web_and_docs_dist(web_dir.clone(), docs_dir.clone()).await;
+    let http = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("build no-redirect client");
+
+    let root_resp = app
+        .client
+        .get(format!("{}/", app.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(root_resp.status(), 200);
+    assert!(root_resp
+        .text()
+        .await
+        .unwrap()
+        .contains("AgentMesh Web Shell"));
+
+    for (path, marker) in [
+        ("/docs", "AgentMesh Docs Shell"),
+        ("/docs/", "AgentMesh Docs Shell"),
+        ("/docs/guides/openclaw/", "OpenClaw Guide Shell"),
+    ] {
+        let resp = app
+            .client
+            .get(format!("{}{path}", app.base_url))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200, "docs page {path}");
+        assert!(
+            resp.text().await.unwrap().contains(marker),
+            "docs body {path}"
+        );
+    }
+
+    let asset_resp = app
+        .client
+        .get(format!("{}/docs/_astro/site.css", app.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(asset_resp.status(), 200);
+    assert_eq!(asset_resp.text().await.unwrap(), "body{color:red}");
+
+    let no_slash_resp = http
+        .get(format!("{}/docs/guides/openclaw", app.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(no_slash_resp.status(), 307);
+    assert_eq!(
+        no_slash_resp.headers()["location"].to_str().unwrap(),
+        "/docs/guides/openclaw/"
+    );
+
+    for (legacy, canonical) in [
+        ("/docs/quick-start", "/docs/guides/quick-start/"),
+        ("/docs/create-agent", "/docs/guides/create-agent/"),
+        ("/docs/openclaw", "/docs/guides/openclaw/"),
+        ("/docs/hermes", "/docs/guides/hermes/"),
+        ("/docs/collaboration", "/docs/guides/collaboration/"),
+        ("/docs/faq", "/docs/guides/faq/"),
+    ] {
+        let resp = http
+            .get(format!("{}{legacy}", app.base_url))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 308, "legacy redirect {legacy}");
+        assert_eq!(
+            resp.headers()["location"].to_str().unwrap(),
+            canonical,
+            "legacy target {legacy}"
+        );
+    }
+
+    let api_resp = app
+        .client
+        .get(format!("{}/api/v1/unknown-route", app.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(api_resp.status(), 404);
+    assert!(api_resp.headers()["content-type"]
+        .to_str()
+        .unwrap()
+        .starts_with("application/json"));
+    let err_json: Value = api_resp.json().await.unwrap();
+    assert_eq!(err_json["error"]["code"], "not_found");
+
+    app.cleanup().await;
+    let _ = fs::remove_dir_all(&web_dir);
+    let _ = fs::remove_dir_all(&docs_dir);
 }
 
 #[tokio::test]
@@ -170,11 +290,7 @@ async fn real_built_web_dist_and_live_observer_ws_full_flow() {
         "/chat",
         "/chat/example-group-id",
         "/docs",
-        "/docs/create-agent",
-        "/docs/openclaw",
-        "/docs/hermes",
-        "/docs/collaboration",
-        "/docs/faq",
+        "/docs/guides/openclaw/",
     ] {
         let response = app
             .client

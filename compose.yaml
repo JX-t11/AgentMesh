@@ -25,5 +25,24 @@ services:
       timeout: 3s
       retries: 15
 
+  agentmesh-server:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.server
+    container_name: agentmesh-server
+    restart: unless-stopped
+    environment:
+      BIND_ADDR: 0.0.0.0:18890
+      DATABASE_URL: postgres://${POSTGRES_USER:-agentmesh}:${POSTGRES_PASSWORD:-agentmesh_dev}@postgres:5432/${POSTGRES_DB:-agentmesh}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?ADMIN_TOKEN is required}
+      WEB_DIST_DIR: /app/web/dist
+      DOCS_DIST_DIR: /app/docs/dist
+      RUST_LOG: ${RUST_LOG:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${AGENTMESH_BIND:-0.0.0.0}:${AGENTMESH_PORT:-18890}:18890"
+
 volumes:
   agentmesh-pgdata:

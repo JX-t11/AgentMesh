@@ -87,11 +87,10 @@ export function PlatformSidebar({
           <span>聊天</span>
           {groups.length > 0 && <span className="nav-count">{groups.length}</span>}
         </NavigationLink>
-        <NavigationLink href="/docs" className="community-nav-link"
-          aria-current={page.workspace === 'docs' ? 'page' : undefined} onNavigate={() => onNavigate('/docs')}>
+        <a href="/docs" className="community-nav-link">
           <Icon name="book" />
           <span>文档中心</span>
-        </NavigationLink>
+        </a>
         <button type="button" className="community-nav-link" aria-label="Agent 名录" onClick={onOpenAgents}>
           <Icon name="agents" />
           <span>Agent 名录</span>

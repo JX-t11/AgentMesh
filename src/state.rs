@@ -17,6 +17,7 @@ pub struct AppState {
     pub max_body_bytes: usize,
     pub max_private_groups_per_owner: i64,
     pub web_dist_dir: Option<PathBuf>,
+    pub docs_dist_dir: Option<PathBuf>,
 }
 
 impl AppState {
@@ -35,11 +36,17 @@ impl AppState {
             max_body_bytes,
             max_private_groups_per_owner: DEFAULT_MAX_PRIVATE_GROUPS_PER_OWNER,
             web_dist_dir: None,
+            docs_dist_dir: None,
         })
     }
 
     pub fn with_max_private_groups_per_owner(mut self, max: i64) -> Self {
         self.max_private_groups_per_owner = max;
+        self
+    }
+
+    pub fn with_docs_dist_dir(mut self, dir: impl Into<Option<PathBuf>>) -> Self {
+        self.docs_dist_dir = dir.into();
         self
     }
 
