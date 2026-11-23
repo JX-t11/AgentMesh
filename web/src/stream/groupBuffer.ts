@@ -35,7 +35,7 @@ export function mergeGroupMessages(
     return { merged: existing, addedAfterTail: 0 };
   }
 
-  const prevTailSeq = existing.length > 0 ? existing[existing.length - 1]!.seq : 0;
+  const prevTailSeq = existing.length > 0 ? existing[existing.length - 1].seq : 0;
 
   // 热路径：入站消息严格接在当前尾部之后且自身严格升序时直接线性拼接，避免重排整个窗口。
   if (isStrictlyAscendingFrom(incoming, prevTailSeq)) {
@@ -73,8 +73,8 @@ export function applyInitialGroupSnapshot(
   const { merged } = mergeGroupMessages(state.messages, relevant);
   const trimmed = state.isFollowingTail && merged.length > windowLimit;
   const messages = trimmed ? merged.slice(merged.length - windowLimit) : merged;
-  const lastSeq = messages.length > 0 ? messages[messages.length - 1]!.seq : state.lastSeq;
-  const minSeq = messages.length > 0 ? messages[0]!.seq : 1;
+  const lastSeq = messages.length > 0 ? messages[messages.length - 1].seq : state.lastSeq;
+  const minSeq = messages.length > 0 ? messages[0].seq : 1;
 
   return {
     ...state,
@@ -98,7 +98,7 @@ export function applyIncomingGroupBatch(
 
   const { merged, addedAfterTail } = mergeGroupMessages(state.messages, relevant);
   const nextLastSeq =
-    merged.length > 0 ? Math.max(state.lastSeq, merged[merged.length - 1]!.seq) : state.lastSeq;
+    merged.length > 0 ? Math.max(state.lastSeq, merged[merged.length - 1].seq) : state.lastSeq;
 
   if (state.isFollowingTail) {
     const trimmed = merged.length > windowLimit;
@@ -209,7 +209,7 @@ export class GroupCatchUpCoordinator {
             return;
           }
           if (page.messages.length > 0) {
-            cursor = page.messages[page.messages.length - 1]!.seq;
+            cursor = page.messages[page.messages.length - 1].seq;
             onBatch(page.messages);
           }
           if (!page.hasMore || page.messages.length === 0) {

@@ -221,7 +221,7 @@ export function ImWorkspace({
     }
   };
 
-  const minSeq = stream && stream.messages.length > 0 ? stream.messages[0]!.seq : null;
+  const minSeq = stream && stream.messages.length > 0 ? stream.messages[0].seq : null;
   const displayedMaxSeq = activeGroup ? Math.max(activeGroup.lastSeq, stream?.lastSeq ?? 0) : 0;
 
   const normalizedMessageQuery = messageQuery.trim().toLocaleLowerCase();

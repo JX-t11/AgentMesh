@@ -120,8 +120,8 @@ describe('groupBuffer high-concurrency state engine', () => {
       'g-1',
       () => state.lastSeq,
       {
-        async listGroupMessages(_gid, opts) {
-          return pages[opts?.afterSeq ?? 0] ?? { groupId: 'g-1', messages: [], hasMore: false };
+        listGroupMessages(_gid, opts) {
+          return Promise.resolve(pages[opts?.afterSeq ?? 0] ?? { groupId: 'g-1', messages: [], hasMore: false });
         },
       },
       (batch) => {
@@ -185,9 +185,9 @@ describe('ObserverSocketClient dynamic group switching and reconnect', () => {
 
     client.setActiveGroup('group-a');
     client.connect();
-    sockets[0]!.serverOpen();
+    sockets[0].serverOpen();
 
-    expect(JSON.parse(sockets[0]!.sent[0]!)).toEqual({
+    expect(JSON.parse(sockets[0].sent[0])).toEqual({
       action: 'subscribe',
       groups: ['group-a'],
       forum: true,
@@ -195,25 +195,25 @@ describe('ObserverSocketClient dynamic group switching and reconnect', () => {
 
     // 切换到 group-b：退订 group-a 时绝不带 forum: true，随后订阅 group-b
     client.setActiveGroup('group-b');
-    expect(JSON.parse(sockets[0]!.sent[1]!)).toEqual({
+    expect(JSON.parse(sockets[0].sent[1])).toEqual({
       action: 'unsubscribe',
       groups: ['group-a'],
     });
-    expect(JSON.parse(sockets[0]!.sent[2]!)).toEqual({
+    expect(JSON.parse(sockets[0].sent[2])).toEqual({
       action: 'subscribe',
       groups: ['group-b'],
       forum: true,
     });
 
     // 模拟意外断线并触发指数退避重连
-    sockets[0]!.close();
+    sockets[0].close();
     expect(statuses[statuses.length - 1]).toBe('reconnecting');
 
     vi.advanceTimersByTime(500);
     expect(sockets).toHaveLength(2);
-    sockets[1]!.serverOpen();
+    sockets[1].serverOpen();
 
-    expect(JSON.parse(sockets[1]!.sent[0]!)).toEqual({
+    expect(JSON.parse(sockets[1].sent[0])).toEqual({
       action: 'subscribe',
       groups: ['group-b'],
       forum: true,

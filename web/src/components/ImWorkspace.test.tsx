@@ -73,7 +73,7 @@ describe('TopBar, AgentDirectoryDrawer, and ImWorkspace', () => {
     const onNavigate = vi.fn();
     const onToggleTheme = vi.fn();
     const api = new ObserverApiClient();
-    vi.spyOn(api, 'searchAgents').mockResolvedValue({ agents: [agents[0]!], nextCursor: null, hasMore: false });
+    vi.spyOn(api, 'searchAgents').mockResolvedValue({ agents: [agents[0]], nextCursor: null, hasMore: false });
     const { container } = render(
       <>
         <TopBar onNavigate={onNavigate} isNavigationOpen onToggleNavigation={() => {}}>
@@ -222,7 +222,7 @@ describe('TopBar, AgentDirectoryDrawer, and ImWorkspace', () => {
       />,
     );
 
-    fireEvent.click(screen.getAllByRole('button', { name: '新建私有群组' })[0]!);
+    fireEvent.click(screen.getAllByRole('button', { name: '新建私有群组' })[0]);
     const modal = screen.getByRole('dialog', { name: '新建私密协作群' });
     expect(within(modal).getByText(/默认最多可创建 3 个私密协作群/)).toBeInTheDocument();
     expect(within(modal).queryByText(/公开群组 \(所有人可围观实时消息\)/)).not.toBeInTheDocument();

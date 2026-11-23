@@ -142,7 +142,7 @@ function parseMarkdownBlocks(raw: string): MarkdownBlock[] {
   let i = 0;
 
   while (i < lines.length) {
-    const line = lines[i]!;
+    const line = lines[i];
 
     if (line.trim() === '') {
       i += 1;
@@ -154,8 +154,8 @@ function parseMarkdownBlocks(raw: string): MarkdownBlock[] {
       const language = fenceMatch[1] ?? '';
       const codeLines: string[] = [];
       i += 1;
-      while (i < lines.length && !/^```\s*$/.test(lines[i]!.trim())) {
-        codeLines.push(lines[i]!);
+      while (i < lines.length && !/^```\s*$/.test(lines[i].trim())) {
+        codeLines.push(lines[i]);
         i += 1;
       }
       if (i < lines.length) {
@@ -169,8 +169,8 @@ function parseMarkdownBlocks(raw: string): MarkdownBlock[] {
     if (headingMatch) {
       blocks.push({
         type: 'heading',
-        level: headingMatch[1]!.length as 1 | 2 | 3,
-        text: headingMatch[2]!.trim(),
+        level: headingMatch[1].length as 1 | 2 | 3,
+        text: headingMatch[2].trim(),
       });
       i += 1;
       continue;
@@ -178,8 +178,8 @@ function parseMarkdownBlocks(raw: string): MarkdownBlock[] {
 
     if (/^>\s?/.test(line)) {
       const quoteLines: string[] = [];
-      while (i < lines.length && /^>\s?/.test(lines[i]!)) {
-        quoteLines.push(lines[i]!.replace(/^>\s?/, ''));
+      while (i < lines.length && /^>\s?/.test(lines[i])) {
+        quoteLines.push(lines[i].replace(/^>\s?/, ''));
         i += 1;
       }
       blocks.push({ type: 'quote', text: quoteLines.join('\n') });
@@ -188,8 +188,8 @@ function parseMarkdownBlocks(raw: string): MarkdownBlock[] {
 
     if (/^[-*+]\s+/.test(line)) {
       const items: string[] = [];
-      while (i < lines.length && /^[-*+]\s+/.test(lines[i]!)) {
-        items.push(lines[i]!.replace(/^[-*+]\s+/, ''));
+      while (i < lines.length && /^[-*+]\s+/.test(lines[i])) {
+        items.push(lines[i].replace(/^[-*+]\s+/, ''));
         i += 1;
       }
       blocks.push({ type: 'ul', items });
@@ -198,8 +198,8 @@ function parseMarkdownBlocks(raw: string): MarkdownBlock[] {
 
     if (/^\d+\.\s+/.test(line)) {
       const items: string[] = [];
-      while (i < lines.length && /^\d+\.\s+/.test(lines[i]!)) {
-        items.push(lines[i]!.replace(/^\d+\.\s+/, ''));
+      while (i < lines.length && /^\d+\.\s+/.test(lines[i])) {
+        items.push(lines[i].replace(/^\d+\.\s+/, ''));
         i += 1;
       }
       blocks.push({ type: 'ol', items });
@@ -209,14 +209,14 @@ function parseMarkdownBlocks(raw: string): MarkdownBlock[] {
     const paragraphLines: string[] = [];
     while (
       i < lines.length &&
-      lines[i]!.trim() !== '' &&
-      !/^```/.test(lines[i]!.trim()) &&
-      !/^(#{1,3})\s+/.test(lines[i]!) &&
-      !/^>\s?/.test(lines[i]!) &&
-      !/^[-*+]\s+/.test(lines[i]!) &&
-      !/^\d+\.\s+/.test(lines[i]!)
+      lines[i].trim() !== '' &&
+      !/^```/.test(lines[i].trim()) &&
+      !/^(#{1,3})\s+/.test(lines[i]) &&
+      !/^>\s?/.test(lines[i]) &&
+      !/^[-*+]\s+/.test(lines[i]) &&
+      !/^\d+\.\s+/.test(lines[i])
     ) {
-      paragraphLines.push(lines[i]!);
+      paragraphLines.push(lines[i]);
       i += 1;
     }
     blocks.push({ type: 'paragraph', text: paragraphLines.join('\n') });
@@ -253,7 +253,7 @@ function renderInlineNodes(
     } else if (token.startsWith('**') && token.endsWith('**')) {
       nodes.push(<strong key={key++}>{token.slice(2, -2)}</strong>);
     } else if (token.startsWith('@')) {
-      const prevChar = index > 0 ? text[index - 1]! : '';
+      const prevChar = index > 0 ? text[index - 1] : '';
       const slug = token.slice(1).toLowerCase();
       const matchedAgent = /[a-zA-Z0-9._-]/.test(prevChar)
         ? undefined

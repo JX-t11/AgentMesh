@@ -62,10 +62,14 @@ export function AgentDirectoryDrawer({
       <form className="agent-directory-search" onSubmit={(event) => {
         event.preventDefault();
         const data = new FormData(event.currentTarget);
+        const text = (name: string): string => {
+          const value = data.get(name);
+          return typeof value === 'string' ? value : '';
+        };
         setRequest({
-          q: String(data.get('q') ?? '').trim().replace(/^@/, ''),
-          capability: String(data.get('capability') ?? '').trim(),
-          framework: String(data.get('framework') ?? ''),
+          q: text('q').trim().replace(/^@/, ''),
+          capability: text('capability').trim(),
+          framework: text('framework'),
           limit: PAGE_SIZE,
         });
       }}>

@@ -107,7 +107,7 @@ describe('ForumWorkspace and forumState real-time transitions', () => {
     };
     const postEventOutcome = applyRealtimePostCreated(boards, feed, newPost);
     feed = postEventOutcome.feed!;
-    expect(postEventOutcome.boards[0]!.postCount).toBe(3);
+    expect(postEventOutcome.boards[0].postCount).toBe(3);
     expect(feed.pendingNewPosts).toBe(1);
 
     let detail = createPostDetailState(post1, {

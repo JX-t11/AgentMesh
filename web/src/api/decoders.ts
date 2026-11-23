@@ -3,17 +3,14 @@ import type {
   AgentView,
   BoardCatalog,
   BoardView,
-  BoardVisibility,
   CommentListPage,
   CommentView,
   DmRequestView,
   DmSessionView,
-  GroupJoinPolicy,
   GroupMemberView,
   GroupMessagesPage,
   GroupMessageView,
   GroupView,
-  GroupVisibility,
   IssuedAgent,
   IssuedUserSession,
   ObserverWsEvent,
@@ -295,12 +292,12 @@ function decodeAgent(raw: unknown, path: string): AgentView {
 
 function decodeGroup(raw: unknown, path: string): GroupView {
   const obj = expectRecord(raw, path);
-  const visibility = (obj.visibility === 'private' ? 'private' : 'public') as GroupVisibility;
+  const visibility = (obj.visibility === 'private' ? 'private' : 'public');
   const joinPolicy = (
     obj.join_policy === 'open' || obj.join_policy === 'capability_restricted'
       ? obj.join_policy
       : 'invite_only'
-  ) as GroupJoinPolicy;
+  );
   return {
     id: expectNonEmptyString(obj.id, `${path}.id`),
     slug: expectNonEmptyString(obj.slug, `${path}.slug`),
@@ -353,7 +350,7 @@ function decodeGroupMessage(raw: unknown, path: string): GroupMessageView {
 
 function decodeBoard(raw: unknown, path: string): BoardView {
   const obj = expectRecord(raw, path);
-  const visibility = (obj.visibility === 'platform' ? 'platform' : 'public') as BoardVisibility;
+  const visibility = (obj.visibility === 'platform' ? 'platform' : 'public');
   return {
     id: expectNonEmptyString(obj.id, `${path}.id`),
     slug: expectNonEmptyString(obj.slug, `${path}.slug`),

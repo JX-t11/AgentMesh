@@ -63,8 +63,8 @@ describe('App end-to-end state orchestration', () => {
     const postId = '55555555-5555-5555-5555-555555555555';
 
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async (input: RequestInfo | URL) => {
-      const url = typeof input === 'string' ? input : input.toString();
+    globalThis.fetch = ((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
       if (url.endsWith('/api/v1/health')) {
         return new Response(JSON.stringify({ status: 'ok' }), { status: 200 });
       }
@@ -98,10 +98,10 @@ describe('App end-to-end state orchestration', () => {
             group_id: groupId,
             members: [
               {
-                agent_id: baseAgents[0]!.id,
-                slug: baseAgents[0]!.slug,
-                display_name: baseAgents[0]!.display_name,
-                framework: baseAgents[0]!.framework,
+                agent_id: baseAgents[0].id,
+                slug: baseAgents[0].slug,
+                display_name: baseAgents[0].display_name,
+                framework: baseAgents[0].framework,
                 joined_at: '2026-11-16T02:00:00Z',
               },
             ],
@@ -120,7 +120,7 @@ describe('App end-to-end state orchestration', () => {
                   id: 'm-3',
                   group_id: groupId,
                   seq: 3,
-                  sender_agent_id: baseAgents[0]!.id,
+                  sender_agent_id: baseAgents[0].id,
                   client_msg_id: 'c-3',
                   content: '通过 after_seq 补拉回来的第 3 条消息',
                   reply_to_msg_id: 'm-2',
@@ -141,7 +141,7 @@ describe('App end-to-end state orchestration', () => {
                 id: 'm-1',
                 group_id: groupId,
                 seq: 1,
-                sender_agent_id: baseAgents[0]!.id,
+                sender_agent_id: baseAgents[0].id,
                 client_msg_id: 'c-1',
                 content: '首条群快照消息',
                 reply_to_msg_id: null,
@@ -180,7 +180,7 @@ describe('App end-to-end state orchestration', () => {
               {
                 id: postId,
                 board_id: boardId,
-                author_agent_id: baseAgents[0]!.id,
+                author_agent_id: baseAgents[0].id,
                 client_req_id: 'p-1',
                 title: '异构 Agent 接入规范草案',
                 content: '支持 OpenClaw 与 Hermes 双生态并行接入。',
@@ -200,7 +200,7 @@ describe('App end-to-end state orchestration', () => {
             post: {
               id: postId,
               board_id: boardId,
-              author_agent_id: baseAgents[0]!.id,
+              author_agent_id: baseAgents[0].id,
               client_req_id: 'p-1',
               title: '异构 Agent 接入规范草案',
               content: '支持 OpenClaw 与 Hermes 双生态并行接入。',
@@ -227,7 +227,7 @@ describe('App end-to-end state orchestration', () => {
       return new Response(JSON.stringify({ error: { code: 'not_found', message: '404' } }), {
         status: 404,
       });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     try {
       render(
@@ -264,7 +264,7 @@ describe('App end-to-end state orchestration', () => {
             client_msg_id: 'c-2',
             content: '我是刚注册上线的 Hermes 节点',
             reply_to_msg_id: 'm-1',
-            mention_agent_ids: [baseAgents[0]!.id],
+            mention_agent_ids: [baseAgents[0].id],
             created_at: '2026-11-16T02:02:10Z',
           },
         });
@@ -311,7 +311,7 @@ describe('App end-to-end state orchestration', () => {
             client_req_id: 'cr-live-1',
             parent_comment_id: null,
             content: 'Hermes 侧 Skill 已验证该接口契约',
-            mention_agent_ids: [baseAgents[0]!.id],
+            mention_agent_ids: [baseAgents[0].id],
             created_at: '2026-11-16T02:04:00Z',
           },
         });
@@ -351,8 +351,8 @@ describe('App end-to-end state orchestration', () => {
     window.history.replaceState(null, '', `/t/${platformPostId}`);
 
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = typeof input === 'string' ? input : input.toString();
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
       const method = init?.method ?? 'GET';
 
       if (url.endsWith('/api/v1/health')) {
@@ -625,7 +625,7 @@ describe('App end-to-end state orchestration', () => {
       return new Response(JSON.stringify({ error: { code: 'not_found', message: '404' } }), {
         status: 404,
       });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     try {
       render(
@@ -740,8 +740,8 @@ describe('App end-to-end state orchestration', () => {
 
     let wsInstance: ControlledWs | null = null;
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async (input: RequestInfo | URL) => {
-      const url = typeof input === 'string' ? input : input.toString();
+    globalThis.fetch = ((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
       if (url.endsWith('/api/v1/health')) {
         return new Response(JSON.stringify({ status: 'ok' }), { status: 200 });
       }
@@ -921,7 +921,7 @@ describe('App end-to-end state orchestration', () => {
       return new Response(JSON.stringify({ error: { code: 'not_found', message: '404' } }), {
         status: 404,
       });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     try {
       render(
@@ -971,7 +971,7 @@ describe('App end-to-end state orchestration', () => {
       fireEvent.click(
         screen.getAllByRole('button', {
           name: '查看 Agent Hermes Auditor (@hermes-auditor) 身份名片',
-        })[0]!,
+        })[0],
       );
       const profileDialog = screen.getByRole('dialog', {
         name: 'Agent 身份名片 · Hermes Auditor',
@@ -1055,8 +1055,8 @@ describe('App end-to-end state orchestration', () => {
     });
 
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = typeof input === 'string' ? input : input.toString();
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
       const method = init?.method ?? 'GET';
       const authHeader = new Headers(init?.headers).get('Authorization') ?? '';
 
@@ -1064,10 +1064,10 @@ describe('App end-to-end state orchestration', () => {
         return new Response(JSON.stringify({ status: 'ok' }), { status: 200 });
       }
       if (url.endsWith('/api/v1/agents/register') && method === 'POST') {
-        const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+        const body = JSON.parse(typeof init?.body === 'string' ? init.body : '{}') as Record<string, unknown>;
         agentRegistered = true;
-        agentDisplayName = String(body.display_name ?? 'Auto Scout');
-        agentDescription = String(body.description ?? '');
+        agentDisplayName = typeof body.display_name === 'string' ? body.display_name : 'Auto Scout';
+        agentDescription = typeof body.description === 'string' ? body.description : '';
         agentCapabilities = Array.isArray(body.capabilities)
           ? (body.capabilities as string[])
           : [];
@@ -1092,7 +1092,7 @@ describe('App end-to-end state orchestration', () => {
         if (authHeader !== `Bearer ${activeAgentToken}`) {
           return new Response(JSON.stringify({ error: { message: '401' } }), { status: 401 });
         }
-        const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+        const body = JSON.parse(typeof init?.body === 'string' ? init.body : '{}') as Record<string, unknown>;
         if (typeof body.display_name === 'string') agentDisplayName = body.display_name;
         if (typeof body.description === 'string') agentDescription = body.description;
         if (Array.isArray(body.capabilities)) agentCapabilities = body.capabilities as string[];
@@ -1126,7 +1126,7 @@ describe('App end-to-end state orchestration', () => {
         );
       }
       if (url.endsWith('/api/v1/me/agents/claim') && method === 'POST') {
-        const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+        const body = JSON.parse(typeof init?.body === 'string' ? init.body : '{}') as Record<string, unknown>;
         if (authHeader !== 'Bearer umesh_bob_session_token') {
           return new Response(JSON.stringify({ error: { message: '401' } }), { status: 401 });
         }
@@ -1212,7 +1212,7 @@ describe('App end-to-end state orchestration', () => {
         );
       }
       return new Response(JSON.stringify({ error: { message: '404' } }), { status: 404 });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     try {
       render(

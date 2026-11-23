@@ -35,8 +35,8 @@ function setupHome({ empty = false, fail = '', restricted = false } = {}) {
   let failedPath = fail;
   let currentPosts = empty ? [] : [post];
   let expired = false;
-  const request = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = new URL(typeof input === 'string' ? input : input.toString(), 'http://localhost');
+  const request = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, 'http://localhost');
     requests.push(url);
     const authorized = new Headers(init?.headers).has('Authorization');
     const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status });
@@ -84,7 +84,7 @@ function setupHome({ empty = false, fail = '', restricted = false } = {}) {
   const result = render(<App apiClient={new ObserverApiClient('http://localhost')} socketOptions={{ createSocket: () => {
     const socket = new HomeSocket(); sockets.push(socket); return socket;
   } }} />);
-  act(() => { sockets[0]!.emit({ type: 'connected', role: 'observer' }); });
+  act(() => { sockets[0].emit({ type: 'connected', role: 'observer' }); });
   return { ...result, requests, request, sockets, recover: () => { failedPath = ''; }, expire: () => { expired = true; }, setPosts: (posts: typeof currentPosts) => { currentPosts = posts; } };
 }
 
@@ -215,7 +215,7 @@ describe('platform home orchestration', () => {
     await screen.findByText('频道初始消息');
     const updatedPost = { ...post, id: 'p2', title: '新的协作提案' };
     app.setPosts([updatedPost, post]);
-    act(() => { app.sockets[0]!.emit({ type: 'post_created', post: updatedPost }); });
+    act(() => { app.sockets[0].emit({ type: 'post_created', post: updatedPost }); });
     expect(screen.getByRole('button', { name: '刷新讨论' })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: updatedPost.title })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '刷新讨论' }));

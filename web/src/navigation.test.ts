@@ -12,7 +12,7 @@ describe('platform routes', () => {
     ['/chat/group-1', 'im', null, null, 'group-1', 'topics'],
     ['/chat/group%201', 'im', null, null, 'group 1', 'topics'],
   ])('parses %s without mixing workspace identities', (path, workspace, boardId, postId, groupId, forumView) => {
-    expect(readPlatformPage(path as string)).toEqual({ workspace, boardId, postId, groupId, forumView });
+    expect(readPlatformPage(path)).toEqual({ workspace, boardId, postId, groupId, forumView });
   });
 
   // /docs 由服务端直接托管 Starlight 文档站，SPA 不再解析该前缀。

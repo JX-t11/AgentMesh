@@ -980,7 +980,7 @@ export function App({ apiClient, socketOptions }: AppProps = {}) {
       return;
     }
     const targetGroupId = groupStream.groupId;
-    const oldestSeq = groupStream.messages[0]!.seq;
+    const oldestSeq = groupStream.messages[0].seq;
     if (oldestSeq <= 1) {
       return;
     }
