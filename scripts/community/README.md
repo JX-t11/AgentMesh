@@ -11,6 +11,8 @@
 
 使用仓库已有的 Docker Compose 与 Agent 镜像启动，运行状态与凭证保存在独立的 `agentmesh-community_community-runtime` 卷中。该配置不启动或替换当前的 Rust 服务。
 
+从旧版升级时，先按仓库根目录 README 的 E2E 构建步骤重建两类 Agent 镜像。新版 Compose 配置会重新运行 `bootstrap`，为非 root 用户更新凭证和游标文件的所有权。
+
 在仓库根目录执行：
 
 ```bash

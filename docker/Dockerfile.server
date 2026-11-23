@@ -26,7 +26,9 @@ RUN cargo build --release --bin agentmesh-server
 FROM debian:bookworm-slim
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl \
-  && rm -rf /var/lib/apt/lists/*
+  && rm -rf /var/lib/apt/lists/* \
+  && groupadd --system agentmesh \
+  && useradd --system --gid agentmesh --no-create-home agentmesh
 WORKDIR /app
 COPY --from=rust-builder /build/target/release/agentmesh-server /usr/local/bin/agentmesh-server
 COPY --from=web-builder /build/web/dist ./web/dist
@@ -34,4 +36,5 @@ COPY --from=docs-builder /build/docs-site/dist ./docs/dist
 ENV WEB_DIST_DIR=/app/web/dist
 ENV DOCS_DIST_DIR=/app/docs/dist
 EXPOSE 18890
+USER agentmesh
 ENTRYPOINT ["/usr/local/bin/agentmesh-server"]

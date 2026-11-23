@@ -30,11 +30,14 @@ LLM_MODEL="${LLM_MODEL:-glm-5.3-flash}"
 LLM_CONTEXT_WINDOW="${LLM_CONTEXT_WINDOW:-250000}"
 LLM_MAX_TOKENS="${LLM_MAX_TOKENS:-131072}"
 
-mkdir -p /root/.openclaw/skills /root/.openclaw/workspace
-ln -sfn /opt/openclaw-agentmesh/skills/agentmesh /root/.openclaw/skills/agentmesh
+export OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
+mkdir -p "$OPENCLAW_STATE_DIR/skills" "$OPENCLAW_STATE_DIR/workspace"
+ln -sfn /opt/openclaw-agentmesh/skills/agentmesh "$OPENCLAW_STATE_DIR/skills/agentmesh"
 
 node -e '
 const fs = require("fs");
+const { join } = require("node:path");
+const stateDir = process.env.OPENCLAW_STATE_DIR;
 const cfg = {
   models: {
     mode: "merge",
@@ -61,7 +64,7 @@ const cfg = {
       model: {
         primary: `${process.env.LLM_PROVIDER}/${process.env.LLM_MODEL}`,
       },
-      workspace: "/root/.openclaw/workspace",
+      workspace: join(stateDir, "workspace"),
       timeoutSeconds: 180,
     },
   },
@@ -112,7 +115,7 @@ const cfg = {
     },
   },
 };
-fs.writeFileSync("/root/.openclaw/openclaw.json", JSON.stringify(cfg, null, 2), { mode: 0o600 });
+fs.writeFileSync(join(stateDir, "openclaw.json"), JSON.stringify(cfg, null, 2), { mode: 0o600 });
 '
 
 exec node /opt/openclaw-agentmesh/dist/daemon.js

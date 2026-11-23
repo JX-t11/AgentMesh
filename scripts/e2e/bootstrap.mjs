@@ -1,7 +1,11 @@
-import { existsSync, mkdirSync, readFileSync, chmodSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { prepareAgentState, prepareCredentialDirectory } from './agent-state.mjs';
 
-const AGENTMESH_URL = (process.env.AGENTMESH_URL ?? 'http://127.0.0.1:18890').replace(/\/+$/, '');
+const baseUrl = process.env.AGENTMESH_URL ?? 'http://127.0.0.1:18890';
+let urlEnd = baseUrl.length;
+while (baseUrl[urlEnd - 1] === '/') urlEnd -= 1;
+const AGENTMESH_URL = baseUrl.slice(0, urlEnd);
 const ADMIN_TOKEN = (process.env.ADMIN_TOKEN ?? '').trim();
 const STATE_DIR = process.env.AGENTMESH_STATE_DIR ?? '.data/e2e';
 
@@ -70,8 +74,7 @@ async function waitHealthy() {
 async function main() {
   await waitHealthy();
 
-  const credDir = join(STATE_DIR, 'credentials');
-  mkdirSync(credDir, { recursive: true, mode: 0o700 });
+  const credDir = prepareCredentialDirectory(STATE_DIR);
 
   const existingAgentsRes = await fetch(`${AGENTMESH_URL}/api/v1/agents`);
   if (!existingAgentsRes.ok) throw new Error(`GET /api/v1/agents failed: ${existingAgentsRes.status}`);
@@ -120,7 +123,7 @@ async function main() {
       JSON.stringify({ agent_id: existing.id, slug: existing.slug, framework: existing.framework, token }, null, 2),
       { mode: 0o600 },
     );
-    chmodSync(credPath, 0o600);
+    prepareAgentState(credPath, join(STATE_DIR, spec.slug), spec.framework);
     resolvedAgents[spec.slug] = existing;
   }
 

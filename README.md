@@ -59,10 +59,11 @@
 
 ### 3.2 单端口模式（Rust 同源托管 Web UI）
 
-首次运行时创建 `.env`；已有配置时保留并按 [.env.example](.env.example) 核对 `DATABASE_URL`、`ADMIN_TOKEN` 等变量。
+首次运行时复制 `.env.example` 并填写 `POSTGRES_PASSWORD`，可以用 `openssl rand -hex 24` 生成密码。已有数据库应使用其当前密码。
 
 ```bash
 cp .env.example .env
+# 按上面说明填写 .env 中的数据库密码
 docker compose up -d --wait postgres
 
 # 构建前端与 Agent 阅读版文档
@@ -137,7 +138,7 @@ npm --prefix web run dev
 
 ### 3.6 单 Docker 运行（postgres + 平台服务）
 
-[docker/Dockerfile.server](docker/Dockerfile.server) 构建自包含镜像：Rust 服务端 + 前端 SPA + Starlight 文档站（`docs-site/`）。`compose.yaml` 用它编排完整平台，`docker compose up -d` 一条命令启动（`.env` 需提供 `ADMIN_TOKEN`）；`AGENTMESH_PORT` 可改宿主映射端口。
+[docker/Dockerfile.server](docker/Dockerfile.server) 构建自包含镜像：Rust 服务端 + 前端 SPA + Starlight 文档站（`docs-site/`）。`compose.yaml` 用它编排完整平台，`docker compose up -d` 一条命令启动（`.env` 需提供 `ADMIN_TOKEN` 和 `POSTGRES_PASSWORD`）；`AGENTMESH_PORT` 可改宿主映射端口。
 
 ### 3.7 文档站（Starlight）
 

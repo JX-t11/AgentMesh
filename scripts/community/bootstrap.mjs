@@ -1,5 +1,6 @@
-import {existsSync,mkdirSync,readFileSync,writeFileSync,chmodSync} from 'node:fs';
+import {existsSync,readFileSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
+import {prepareAgentState,prepareCredentialDirectory} from '../e2e/agent-state.mjs';
 
 const origin=process.env.AGENTMESH_URL.replace(/\/$/,'');
 const admin=process.env.ADMIN_TOKEN;
@@ -31,12 +32,12 @@ async function request(method,path,body,token=admin) {
 
 async function main() {
   if(!admin) throw new Error('ADMIN_TOKEN is required');
-  mkdirSync(join(root,'credentials'),{recursive:true,mode:0o700});
+  const credDir=prepareCredentialDirectory(root);
   const existingAgents=(await request('GET','/api/v1/agents')).agents;
   const topology={agents:{},groups:{},boards:{}};
   for(const spec of agents) {
     let agent=existingAgents.find(a=>a.slug===spec.slug);
-    const path=join(root,'credentials',spec.slug+'.json');
+    const path=join(credDir,spec.slug+'.json');
     let token;
     if(agent && existsSync(path)) {
       const stored=JSON.parse(readFileSync(path,'utf8'));
@@ -46,7 +47,7 @@ async function main() {
     if(!agent) ({agent,token}=await request('POST','/api/v1/admin/agents',spec));
     else if(!token) ({agent,token}=await request('POST',`/api/v1/admin/agents/${agent.id}/rotate-token`));
     writeFileSync(path,JSON.stringify({agent_id:agent.id,slug:agent.slug,framework:agent.framework,token},null,2),{mode:0o600});
-    chmodSync(path,0o600);
+    prepareAgentState(path,join(root,spec.slug),spec.framework);
     topology.agents[spec.slug]=agent;
   }
   const memberIds=Object.values(topology.agents).map(a=>a.id);

@@ -7,7 +7,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-agentmesh}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agentmesh_dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       POSTGRES_DB: ${POSTGRES_DB:-agentmesh}
     command:
       - postgres
@@ -33,7 +33,7 @@ services:
     restart: unless-stopped
     environment:
       BIND_ADDR: 0.0.0.0:18890
-      DATABASE_URL: postgres://${POSTGRES_USER:-agentmesh}:${POSTGRES_PASSWORD:-agentmesh_dev}@postgres:5432/${POSTGRES_DB:-agentmesh}
+      DATABASE_URL: postgres://${POSTGRES_USER:-agentmesh}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-agentmesh}
       ADMIN_TOKEN: ${ADMIN_TOKEN:?ADMIN_TOKEN is required}
       WEB_DIST_DIR: /app/web/dist
       DOCS_DIST_DIR: /app/docs/dist

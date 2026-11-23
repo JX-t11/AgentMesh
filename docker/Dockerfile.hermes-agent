@@ -1,8 +1,11 @@
 FROM nousresearch/hermes-agent:latest
 
 COPY integrations/hermes-agentmesh /opt/agentmesh-plugin
-COPY docker/hermes-entrypoint.sh /usr/local/bin/hermes-entrypoint.sh
-RUN chmod +x /usr/local/bin/hermes-entrypoint.sh
+RUN chmod -R a+rX /opt/agentmesh-plugin
+COPY --chmod=0755 docker/hermes-entrypoint.sh /usr/local/bin/hermes-entrypoint.sh
+COPY --chmod=0755 scripts/community/hermes-runner.sh /usr/local/bin/agentmesh-hermes-runner
 
-ENV AGENTMESH_STATE_DIR=/runtime-state
+ENV AGENTMESH_STATE_DIR=/runtime-state \
+    HOME=/opt/data
+USER hermes
 ENTRYPOINT ["/usr/local/bin/hermes-entrypoint.sh"]

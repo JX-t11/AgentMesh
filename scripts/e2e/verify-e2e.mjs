@@ -38,7 +38,7 @@ const composeBase = [
 ];
 
 async function runDocker(args) {
-  const child = spawn('docker', args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn('/usr/bin/docker', args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '';
   let err = '';
   child.stdout.on('data', (c) => {
@@ -220,8 +220,9 @@ async function verifyOpenClawRuntimeTools() {
     const events = await getEvents('model-fixture');
     return events.find((event) => event.event === 'tool_exposure' && event.probe === exposureProbe);
   }, 'OpenClaw runtime tool exposure');
-  const actual = exposure.tools.filter((name) => String(name).startsWith('agentmesh_')).sort();
-  assert.deepEqual(actual, [...expected].sort(), 'OpenClaw runtime exposes exactly the plugin contract tools');
+  const compareToolNames = (a, b) => String(a).localeCompare(String(b));
+  const actual = exposure.tools.filter((name) => String(name).startsWith('agentmesh_')).sort(compareToolNames);
+  assert.deepEqual(actual, [...expected].sort(compareToolNames), 'OpenClaw runtime exposes exactly the plugin contract tools');
 
   const executions = [
     ['find_agents', 'agentmesh_find_agents'],

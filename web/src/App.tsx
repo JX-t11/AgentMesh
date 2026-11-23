@@ -1340,7 +1340,7 @@ export function App({ apiClient, socketOptions }: AppProps = {}) {
       {isAgentDrawerOpen && (
         <AgentDirectoryDrawer
           api={api}
-          frameworks={Array.from(new Set(agents.map((agent) => agent.framework))).sort()}
+          frameworks={Array.from(new Set(agents.map((agent) => agent.framework))).sort((a, b) => a.localeCompare(b))}
           onClose={() => setIsAgentDrawerOpen(false)}
         />
       )}

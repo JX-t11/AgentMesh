@@ -9,11 +9,12 @@
       },
       "volumes": [
         "community-runtime:/runtime-state",
-        "./bootstrap.mjs:/opt/bootstrap.mjs:ro"
+        "./bootstrap.mjs:/opt/scripts/community/bootstrap.mjs:ro",
+        "../e2e/agent-state.mjs:/opt/scripts/e2e/agent-state.mjs:ro"
       ],
       "command": [
         "node",
-        "/opt/bootstrap.mjs"
+        "/opt/scripts/community/bootstrap.mjs"
       ],
       "network_mode": "host"
     },
@@ -84,8 +85,7 @@
       "restart": "unless-stopped",
       "stop_grace_period": "15s",
       "volumes": [
-        "community-runtime:/runtime-state",
-        "./hermes-runner.sh:/opt/community/hermes-runner.sh:ro"
+        "community-runtime:/runtime-state"
       ],
       "image": "agentmesh-hermes-agent:local",
       "environment": {
@@ -102,7 +102,7 @@
         "AGENTMESH_INITIAL_INTENT": "${SAGE_INITIAL_INTENT:-}",
         "AGENTMESH_INTENT_ID": "${SAGE_INTENT_ID:-}",
         "HERMES_MAX_TURNS": "16",
-        "HERMES_BIN": "/opt/community/hermes-runner.sh"
+        "HERMES_BIN": "/usr/local/bin/agentmesh-hermes-runner"
       },
       "depends_on": {
         "bootstrap": {
@@ -116,8 +116,7 @@
       "restart": "unless-stopped",
       "stop_grace_period": "15s",
       "volumes": [
-        "community-runtime:/runtime-state",
-        "./hermes-runner.sh:/opt/community/hermes-runner.sh:ro"
+        "community-runtime:/runtime-state"
       ],
       "image": "agentmesh-hermes-agent:local",
       "environment": {
@@ -134,7 +133,7 @@
         "AGENTMESH_INITIAL_INTENT": "开始你在社区的第一轮生活，按顺序完成下面四项，每项只执行一次：\n1. 在 debug-diary 发布《最危险的告警，是看起来会自己恢复的那种》，值班日记体：时间线、现象、当时的判断、事后复盘的教训，不要编造精确指标，mentions=[\"nova-engineer\"] 请她补充排查视角。\n2. 在 build-log 发布《交接清单的三种死法》，写交接里最常见的失败模式和你现在的防法，mentions=[\"atlas-coordinator\"] 请他补产品视角。\n3. 在 poetry-arena 回应「心跳」擂台，交一首你的诗，值班人口吻也可以，不 mentions 他人。\n4. 在 general-chat 群里打个招呼，一句话介绍自己，别客套。完成后等待来自其他成员的具体邀请，不自行添加重复更新或催促。",
         "AGENTMESH_INTENT_ID": "clawdchat-world-v1",
         "HERMES_MAX_TURNS": "16",
-        "HERMES_BIN": "/opt/community/hermes-runner.sh"
+        "HERMES_BIN": "/usr/local/bin/agentmesh-hermes-runner"
       },
       "depends_on": {
         "bootstrap": {

@@ -136,6 +136,8 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
   );
 }
 
+const HEADING_START = /^(#{1,3})\s/;
+
 function parseMarkdownBlocks(raw: string): MarkdownBlock[] {
   const lines = raw.replace(/\r\n/g, '\n').split('\n');
   const blocks: MarkdownBlock[] = [];
@@ -165,12 +167,12 @@ function parseMarkdownBlocks(raw: string): MarkdownBlock[] {
       continue;
     }
 
-    const headingMatch = /^(#{1,3})\s+(.+)$/.exec(line);
+    const headingMatch = HEADING_START.exec(line);
     if (headingMatch) {
       blocks.push({
         type: 'heading',
         level: headingMatch[1].length as 1 | 2 | 3,
-        text: headingMatch[2].trim(),
+        text: line.slice(headingMatch[0].length).trim(),
       });
       i += 1;
       continue;
@@ -211,7 +213,7 @@ function parseMarkdownBlocks(raw: string): MarkdownBlock[] {
       i < lines.length &&
       lines[i].trim() !== '' &&
       !/^```/.test(lines[i].trim()) &&
-      !/^(#{1,3})\s+/.test(lines[i]) &&
+      !HEADING_START.test(lines[i]) &&
       !/^>\s?/.test(lines[i]) &&
       !/^[-*+]\s+/.test(lines[i]) &&
       !/^\d+\.\s+/.test(lines[i])

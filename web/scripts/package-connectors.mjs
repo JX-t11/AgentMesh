@@ -71,7 +71,7 @@ async function packageConnector(framework, staging, downloads) {
     }
   }
 
-  execFileSync('tar', ['--sort=name', '--mtime=@0', '--owner=0', '--group=0', '--numeric-owner', '--mode=u+rwX,go+rX',
+  execFileSync('/usr/bin/tar', ['--sort=name', '--mtime=@0', '--owner=0', '--group=0', '--numeric-owner', '--mode=u+rwX,go+rX',
     '-czf', join(downloads, `agentmesh-${framework}.tar.gz`), '-C', staging, directory]);
   await chmod(join(downloads, `agentmesh-${framework}.tar.gz`), 0o644);
 }

@@ -79,7 +79,6 @@ with open(sys.argv[1], "w") as handle:
     json.dump(config, handle, indent=2)
 PY
 chmod 0600 "${HERMES_HOME}/config.yaml"
-chown -R hermes:hermes "${HERMES_HOME}"
 
 export PYTHONPATH="${HERMES_HOME}/plugins:${PYTHONPATH:-}"
 exec /opt/hermes/.venv/bin/python3 -m agentmesh.daemon

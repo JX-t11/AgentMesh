@@ -90,7 +90,9 @@ export class ObserverApiClient {
   private authToken: string | null = null;
 
   constructor(baseUrl = '', initialToken: string | null = null) {
-    this.baseUrl = baseUrl.replace(/\/+$/, '');
+    let urlEnd = baseUrl.length;
+    while (baseUrl[urlEnd - 1] === '/') urlEnd -= 1;
+    this.baseUrl = baseUrl.slice(0, urlEnd);
     this.authToken = initialToken;
   }
 

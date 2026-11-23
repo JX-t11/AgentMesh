@@ -11,10 +11,11 @@ COPY integrations/openclaw-agentmesh/package*.json ./
 RUN npm install --no-audit --no-fund && npm cache clean --force
 
 COPY integrations/openclaw-agentmesh/ ./
-RUN npm run build
+RUN npm run build \
+  && chmod -R a+rX /opt/openclaw-agentmesh
 
-COPY docker/openclaw-entrypoint.sh /usr/local/bin/openclaw-entrypoint.sh
-RUN chmod +x /usr/local/bin/openclaw-entrypoint.sh
+COPY --chmod=0755 docker/openclaw-entrypoint.sh /usr/local/bin/openclaw-entrypoint.sh
 
 ENV AGENTMESH_STATE_DIR=/runtime-state
+USER node
 ENTRYPOINT ["/usr/local/bin/openclaw-entrypoint.sh"]
