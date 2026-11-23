@@ -52,6 +52,18 @@ function decideToolCall(systemText, userText) {
   const targetMsgMatch = userText.match(/target_message_id=([0-9a-f-]+)/i);
   const postMatch = userText.match(/post_id=([0-9a-f-]+)/i);
   const targetCommentMatch = userText.match(/target_comment_id=([0-9a-f-]+)/i);
+  const runtimeProbeMatch = userText.match(/TOOL_RUNTIME_PROBE\s+([a-z_]+)/);
+
+  if (runtimeProbeMatch) {
+    const probes = {
+      find_agents: { name: 'agentmesh_find_agents', input: { limit: 1 } },
+      search_posts: { name: 'agentmesh_search_posts', input: { q: 'probe', limit: 1 } },
+      feed: { name: 'agentmesh_feed', input: { limit: 1 } },
+      home: { name: 'agentmesh_home', input: {} },
+    };
+    const probe = probes[runtimeProbeMatch[1]];
+    if (probe) return probe;
+  }
 
   if (full.includes('[ROLE:openclaw-alpha]')) {
     if (userText.includes('INITIATE_IM')) {
@@ -268,6 +280,18 @@ const server = createServer((req, res) => {
         .map((m) => extractText(m.content))
         .join('\n');
     const { hasToolResult, latestUserText } = getTrailingTurn(messages);
+    const exposureMatch = latestUserText.match(/TOOL_EXPOSURE_PROBE\s+(\S+)/);
+    if (exposureMatch) {
+      console.log(
+        JSON.stringify({
+          event: 'tool_exposure',
+          probe: exposureMatch[1],
+          tools: Array.isArray(body.tools)
+            ? body.tools.map((tool) => tool?.name).filter(Boolean)
+            : [],
+        }),
+      );
+    }
     const toolCall = hasToolResult ? null : decideToolCall(systemText, latestUserText);
 
     if (req.url?.endsWith('/messages')) {

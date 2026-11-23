@@ -180,12 +180,99 @@ async function verifySocialDiscovery(writer, board) {
   assert.ok(inbox.items.some((item) => item.kind === 'post_reply' && item.source_id === reply.comment.id));
 }
 
+async function runOpenClawAgentProbe(message, sessionId) {
+  const output = await runDocker([
+    ...composeBase,
+    'exec',
+    '-T',
+    'openclaw-alpha',
+    'openclaw',
+    '--no-color',
+    'agent',
+    '--local',
+    '--json',
+    '--session-id',
+    sessionId,
+    '--message',
+    message,
+  ]);
+  return JSON.parse(output.trim());
+}
+
+async function verifyOpenClawRuntimeTools() {
+  const manifestRaw = await runDocker([
+    ...composeBase,
+    'exec',
+    '-T',
+    'openclaw-alpha',
+    'cat',
+    '/opt/openclaw-agentmesh/openclaw.plugin.json',
+  ]);
+  const expected = JSON.parse(manifestRaw).contracts.tools;
+  assert.ok(Array.isArray(expected) && expected.length > 0, 'plugin manifest declares contract tools');
+
+  const exposureProbe = `tool-exposure-${runId}`;
+  await runOpenClawAgentProbe(
+    `TOOL_EXPOSURE_PROBE ${exposureProbe} reply with OK and do not call any tool.`,
+    exposureProbe,
+  );
+  const exposure = await until(async () => {
+    const events = await getEvents('model-fixture');
+    return events.find((event) => event.event === 'tool_exposure' && event.probe === exposureProbe);
+  }, 'OpenClaw runtime tool exposure');
+  const actual = exposure.tools.filter((name) => String(name).startsWith('agentmesh_')).sort();
+  assert.deepEqual(actual, [...expected].sort(), 'OpenClaw runtime exposes exactly the plugin contract tools');
+
+  const executions = [
+    ['find_agents', 'agentmesh_find_agents'],
+    ['search_posts', 'agentmesh_search_posts'],
+    ['feed', 'agentmesh_feed'],
+    ['home', 'agentmesh_home'],
+  ];
+  for (const [probe, tool] of executions) {
+    const sessionId = `tool-runtime-${probe}-${runId}`;
+    const result = await runOpenClawAgentProbe(
+      `TOOL_RUNTIME_PROBE ${probe} ${sessionId}: use the requested tool once, then reply OK.`,
+      sessionId,
+    );
+    const successful = result?.meta?.agentMeta?.terminalReceipt?.successfulToolNames ?? [];
+    assert.ok(
+      successful.includes(tool),
+      `OpenClaw runtime executed ${tool} (successful: ${successful.join(', ') || 'none'})`,
+    );
+  }
+
+  const doctor = await runDocker([
+    ...composeBase,
+    'exec',
+    '-T',
+    'openclaw-alpha',
+    'openclaw',
+    '--no-color',
+    'plugins',
+    'doctor',
+  ]);
+  assert.doesNotMatch(doctor, /must declare contracts\.tools/, 'plugin manifest declarations are complete');
+
+  console.log(`PASS: OpenClaw runtime exposes ${expected.length} contract tools and executes discovery probes.`);
+}
+
 async function main() {
   console.log(`Starting AgentMesh 4-Agent E2E verification (mode=${protocolOnly ? 'protocol-check' : 'real-llm'}, runId=${runId})`);
 
   try {
     // Clear previous E2E state if any so tests always start clean
     await runDocker([...composeBase, 'down', '-v', '--remove-orphans']);
+
+    // Build agent images from the current checkout; later `up --no-build` would otherwise reuse a stale image.
+    await runDocker([
+      ...composeBase,
+      'build',
+      'openclaw-alpha',
+      'openclaw-beta',
+      'hermes-gamma',
+      'hermes-delta',
+    ]);
 
     // Start core infrastructure + model fixture (if protocol-check) then run one-shot bootstrap
     const infraArgs = [...composeBase, 'up', '-d', '--build', '--wait', 'postgres', 'agentmesh-server'];
@@ -618,6 +705,9 @@ async function main() {
     assert.equal(ownerDmRead.data.messages.length, 1);
 
     await verifySocialDiscovery(gammaCred, rfcBoard);
+    if (protocolOnly) {
+      await verifyOpenClawRuntimeTools();
+    }
     ws.close();
 
     console.log('PASS: 2 OpenClaw + 2 Hermes Agents completed IM, forum, restart, observer, privacy, and social discovery checks.');
