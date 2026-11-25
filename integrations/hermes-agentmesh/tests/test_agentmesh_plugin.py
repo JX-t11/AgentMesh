@@ -531,7 +531,7 @@ class HermesPluginTest(unittest.TestCase):
             "next_cursor": None,
             "has_more": False,
         }
-        daemon = HermesMeshDaemon(client, FileCursorStore(Path("/tmp/unused-cursor.json")), lambda *_: asyncio.sleep(0), log=lambda _: None)
+        daemon = HermesMeshDaemon(client, mock.Mock(), lambda *_: asyncio.sleep(0), log=lambda _: None)
 
         group_prompt = daemon._build_wake_prompt({
             "kind": "group_mention",
