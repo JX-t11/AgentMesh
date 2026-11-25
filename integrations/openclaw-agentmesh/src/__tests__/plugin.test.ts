@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import plugin from '../index.js';
-import { AgentMeshClient, InboxEventView } from '../client.js';
+import { AgentMeshApiError, AgentMeshClient, InboxEventView } from '../client.js';
 import { AgentMeshBridgeDaemon, FileCursorStore } from '../daemon.js';
 
 const tempDirs: string[] = [];
@@ -432,6 +432,233 @@ describe('openclaw-agentmesh plugin & client', () => {
       );
       await daemon2.runOnceStartupAndIntent({ id: 'intent-1', prompt: 'Start discussion' });
       expect(turns).toEqual(['inbox:inbox:2', 'intent:intent:intent-1']);
+    } finally {
+      server.close();
+    }
+  });
+
+  it('client covers directory, social, DM, forum, inbox and error contracts', async () => {
+    const selfId = '11111111-1111-4111-8111-111111111111';
+    const peerId = '22222222-2222-4222-8222-222222222222';
+    const groupId = '33333333-3333-4333-8333-333333333333';
+    const boardId = '44444444-4444-4444-8444-444444444444';
+    const postId = '66666666-6666-4666-8666-666666666666';
+    const commentId = '77777777-7777-4777-8777-777777777777';
+    const dmRequestId = '88888888-8888-4888-8888-888888888888';
+    const dmGroupId = '99999999-9999-4999-8999-999999999999';
+    const msgId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const calls: Array<{ method: string; url: string; body: unknown }> = [];
+
+    const agent = {
+      id: selfId,
+      slug: 'openclaw-alpha',
+      display_name: 'Alpha',
+      framework: 'openclaw',
+      description: null,
+      owner_user_id: null,
+      revoked_at: null,
+      created_at: '2026-11-16T00:00:00Z',
+    };
+    const peer = { ...agent, id: peerId, slug: 'hermes-gamma', display_name: 'Gamma' };
+    const group = {
+      id: groupId,
+      slug: 'mesh-general',
+      name: 'Mesh General',
+      description: null,
+      is_dm: false,
+      visibility: 'public',
+      join_policy: 'open',
+      required_capabilities: [],
+      creator_agent_id: peerId,
+      creator_user_id: null,
+      last_seq: 2,
+      member_count: 2,
+      created_at: '2026-11-16T00:00:00Z',
+    };
+    const board = { id: boardId, slug: 'rfcs', name: 'RFCs', description: null, post_count: 1, created_at: group.created_at };
+    const post = {
+      id: postId,
+      board_id: boardId,
+      author_agent_id: peerId,
+      client_req_id: 'p1',
+      title: 'Protocol RFC',
+      content: 'Discuss the protocol',
+      mention_agent_ids: [],
+      comment_count: 1,
+      last_activity_at: group.created_at,
+      created_at: group.created_at,
+    };
+    const comment = {
+      id: commentId,
+      post_id: postId,
+      seq: 1,
+      author_agent_id: peerId,
+      client_req_id: 'c1',
+      parent_comment_id: null,
+      content: 'Looks good',
+      mention_agent_ids: [],
+      created_at: group.created_at,
+    };
+    const message = {
+      id: msgId,
+      group_id: groupId,
+      seq: 2,
+      sender_agent_id: peerId,
+      client_msg_id: 'm1',
+      content: 'hello',
+      reply_to_msg_id: null,
+      mention_agent_ids: [],
+      created_at: group.created_at,
+    };
+    const dmRequest = {
+      id: dmRequestId,
+      sender_agent_id: peerId,
+      sender_slug: peer.slug,
+      sender_display_name: peer.display_name,
+      receiver_agent_id: selfId,
+      receiver_slug: agent.slug,
+      receiver_display_name: agent.display_name,
+      status: 'pending',
+      request_message: 'sync',
+      dm_group_id: null,
+      created_at: group.created_at,
+      updated_at: group.created_at,
+    };
+    const inboxItem = {
+      inbox_seq: 1,
+      kind: 'post_mention',
+      source_id: postId,
+      group_id: null,
+      post_id: postId,
+      actor_agent_id: peerId,
+      summary: 'Alpha mentioned',
+      is_acked: false,
+      created_at: group.created_at,
+    };
+
+    const server = createServer((req, res) => {
+      let raw = '';
+      req.on('data', (chunk) => {
+        raw += chunk.toString();
+      });
+      req.on('end', () => {
+        const body = raw ? JSON.parse(raw) : null;
+        calls.push({ method: req.method ?? '', url: req.url ?? '', body });
+        const reply = (payload: unknown, status = 200) => {
+          res.statusCode = status;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(payload));
+        };
+
+        if (req.url === '/api/v1/agents/me') {
+          return req.method === 'PATCH' ? reply({ agent: { ...agent, display_name: 'Renamed' } }) : reply({ agent });
+        }
+        if (req.url === '/api/v1/agents') return reply({ agents: [agent, peer] });
+        if (req.url?.startsWith('/api/v1/agents/search')) return reply({ agents: [peer], next_cursor: 'next', has_more: true });
+        if (req.url === `/api/v1/agents/by-slug/${peer.slug}`) return reply({ agent: peer });
+        if (req.url?.includes('/api/v1/agents/me/follows/')) return reply({ ok: true });
+        if (req.url?.includes('/api/v1/agents/me/board-subscriptions/')) return reply({ ok: true });
+        if (req.url?.startsWith('/api/v1/agents/me/feed')) return reply({ board_id: null, posts: [post], next_cursor: null, has_more: false });
+        if (req.url === '/api/v1/agents/me/home') {
+          return reply({ feed: { posts: [post] }, inbox: { items: [inboxItem] }, pending_dm_requests: [dmRequest] });
+        }
+        if (req.url === '/api/v1/agents/me/board-subscriptions') return reply({ boards: [board] });
+        if (req.url === '/api/v1/groups' && req.method === 'GET') return reply({ groups: [group] });
+        if (req.url === '/api/v1/groups' && req.method === 'POST') return reply({ group }, 201);
+        if (req.url === `/api/v1/groups/${groupId}/members`) return reply({ group_id: groupId, members: [agent, peer] });
+        if (req.url === `/api/v1/groups/${groupId}/join`) return reply({ group });
+        if (req.url?.startsWith(`/api/v1/groups/${groupId}/messages`)) {
+          return req.method === 'POST' ? reply({ message }, 201) : reply({ group_id: groupId, messages: [message], has_more: false });
+        }
+        if (req.url === '/api/v1/boards') return reply({ boards: [board], hidden_platform_count: 0, next_cursor: null, has_more: false });
+        if (req.url?.startsWith(`/api/v1/boards/${boardId}/posts`)) {
+          return req.method === 'POST' ? reply({ post }, 201) : reply({ board_id: boardId, posts: [post], next_cursor: 'next', has_more: true });
+        }
+        if (req.url === `/api/v1/posts/${postId}`) return reply({ post });
+        if (req.url?.startsWith(`/api/v1/posts/${postId}/comments`)) {
+          return req.method === 'POST'
+            ? reply({ comment, post_comment_count: 2 }, 201)
+            : reply({ post_id: postId, comments: [comment], next_cursor: null, has_more: false });
+        }
+        if (req.url === '/api/v1/posts' || req.url?.startsWith('/api/v1/posts?')) return reply({ board_id: null, posts: [post], next_cursor: null, has_more: false });
+        if (req.url === `/api/v1/dm/requests/${dmRequestId}/respond`) return reply({ request: { ...dmRequest, status: 'accepted', dm_group_id: dmGroupId } });
+        if (req.url?.startsWith('/api/v1/dm/requests')) {
+          return req.method === 'POST' ? reply({ request: dmRequest }, 201) : reply({ requests: [dmRequest] });
+        }
+        if (req.url === '/api/v1/dm/sessions') {
+          return reply({ sessions: [{ group_id: dmGroupId, slug: 'dm-openclaw-hermes', peer_agent_id: peerId }] });
+        }
+        if (req.url === '/api/v1/inbox/ack') return reply({ acked_inbox_seq: 1 });
+        if (req.url?.startsWith('/api/v1/inbox')) return reply({ items: [inboxItem], next_after_inbox_seq: 1, acked_inbox_seq: 1, has_more: false });
+        reply({ error: { code: 'not_found', message: 'not found' } }, 404);
+      });
+    });
+
+    const listen = Promise.withResolvers<void>();
+    server.listen(0, '127.0.0.1', () => listen.resolve());
+    await listen.promise;
+    const addr = server.address() as { port: number };
+
+    try {
+      const client = new AgentMeshClient({ baseUrl: `http://127.0.0.1:${addr.port}`, token: 'amesh_tok' });
+      const me = await client.whoami();
+      expect(me.agent.id).toBe(selfId);
+      expect(me.directory).toHaveLength(2);
+
+      await client.updateProfile({ displayName: 'Renamed', description: ' Coordinate ', capabilities: ['rust'] });
+      await expect(client.updateProfile({})).rejects.toThrow('must provide');
+      expect(await client.listAgents()).toHaveLength(2);
+      expect((await client.findAgents({ q: 'gamma', framework: 'hermes', capability: 'research', limit: 10 })).has_more).toBe(true);
+      expect(await client.followAgent(`@${peer.slug}`, true)).toEqual({ agent_id: peerId, following: true });
+      expect(await client.followAgent(peerId, false)).toEqual({ agent_id: peerId, following: false });
+      expect(await client.subscribeBoard('rfcs', true)).toEqual({ board_id: boardId, subscribed: true });
+      expect(await client.subscribeBoard(boardId, false)).toEqual({ board_id: boardId, subscribed: false });
+      expect((await client.readFeed({ limit: 10 })).posts).toHaveLength(1);
+      expect((await client.readHome()).pending_dm_requests).toHaveLength(1);
+      expect(await client.listGroups()).toEqual([group]);
+      expect((await client.createGroup({
+        slug: 'task',
+        name: 'Task',
+        description: 'Work',
+        joinPolicy: 'capability_restricted',
+        requiredCapabilities: ['rust'],
+        members: [`@${peer.slug}`],
+      })).group.id).toBe(groupId);
+      expect((await client.groupMembers('mesh-general')).members).toHaveLength(2);
+      expect((await client.joinGroup(groupId)).group.id).toBe(groupId);
+      expect((await client.requestDm({ targetAgent: `@${peer.slug}`, message: ' sync ' })).already_existed).toBe(false);
+      expect((await client.respondDmRequest({ requestId: dmRequestId, action: 'accept' })).request.status).toBe('accepted');
+      expect(await client.listDmRequests('pending')).toEqual([dmRequest]);
+      expect(await client.listDmRequests()).toEqual([dmRequest]);
+      expect(await client.listDmSessions()).toHaveLength(1);
+      expect((await client.readGroupMessages({ group: 'mesh-general', afterSeq: 0, beforeSeq: 3, limit: 20 })).messages).toEqual([message]);
+      expect((await client.sendGroupMessage({ group: 'mesh-general', content: 'hello', clientMsgId: 'm1', replyToMsgId: msgId, mentions: [peerId] })).idempotent_reused).toBe(false);
+      expect(await client.listForumBoards()).toEqual([board]);
+      expect((await client.listForumPosts({ board: 'rfcs', sort: 'active', cursor: 'next', limit: 10 })).has_more).toBe(true);
+      const detail = await client.readForumPost({ postId, limit: 20 });
+      expect(detail.post.id).toBe(postId);
+      expect(detail.comments).toEqual([comment]);
+      expect((await client.createForumPost({ board: 'rfcs', title: 'Protocol RFC', content: 'Discuss the protocol', clientReqId: 'p1', mentions: [`@${peer.slug}`] })).post.id).toBe(postId);
+      expect((await client.createForumComment({ postId, content: 'Looks good', clientReqId: 'c1', parentCommentId: commentId, mentions: [peerId] })).post_comment_count).toBe(2);
+      expect((await client.searchPosts({ q: 'protocol', board: 'rfcs', limit: 10 })).posts).toEqual([post]);
+      expect((await client.pollInbox({ afterInboxSeq: 0, unreadOnly: true, limit: 20 })).items).toEqual([inboxItem]);
+      expect(await client.ackInbox(1)).toEqual({ acked_inbox_seq: 1 });
+
+      await expect(client.followAgent(peerId, 'yes' as unknown as boolean)).rejects.toThrow('following must be a boolean');
+      await expect(client.listDmRequests('unknown' as never)).rejects.toThrow('status must be');
+      await expect(client.listForumPosts({ board: 'rfcs', sort: 'hot' as never })).rejects.toThrow('sort must be');
+      await expect(client.readGroupMessages({ group: 'mesh-general', limit: 101 })).rejects.toThrow('limit must be');
+      await expect(client.requestDm({ targetAgent: '' })).rejects.toThrow('target_agent must be');
+      await expect(client.ackInbox(-1)).rejects.toThrow('up_to_inbox_seq must be');
+
+      const errorClient = new AgentMeshClient({
+        baseUrl: `http://127.0.0.1:${addr.port}`,
+        token: 'amesh_tok',
+        fetchImpl: async () => new Response(JSON.stringify({ error: { code: 'boom', message: 'failed' } }), { status: 500 }),
+      });
+      const error = await errorClient.listAgents().catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(AgentMeshApiError);
+      expect((error as AgentMeshApiError).status).toBe(500);
     } finally {
       server.close();
     }

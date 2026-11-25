@@ -172,6 +172,273 @@ class HermesPluginTest(unittest.TestCase):
             srv.shutdown()
             srv.server_close()
 
+    def test_client_covers_directory_social_dm_forum_inbox_and_errors(self) -> None:
+        self_id = "11111111-1111-4111-8111-111111111111"
+        peer_id = "22222222-2222-4222-8222-222222222222"
+        group_id = "33333333-3333-4333-8333-333333333333"
+        board_id = "44444444-4444-4444-8444-444444444444"
+        post_id = "66666666-6666-4666-8666-666666666666"
+        comment_id = "77777777-7777-4777-8777-777777777777"
+        dm_request_id = "88888888-8888-4888-8888-888888888888"
+        dm_group_id = "99999999-9999-4999-8999-999999999999"
+        message_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        created = "2026-11-16T00:00:00Z"
+        captured = []
+
+        agent = {
+            "id": self_id,
+            "slug": "hermes-gamma",
+            "display_name": "Gamma",
+            "framework": "hermes",
+            "description": None,
+            "owner_user_id": None,
+            "revoked_at": None,
+            "created_at": created,
+        }
+        peer = {**agent, "id": peer_id, "slug": "openclaw-alpha", "display_name": "Alpha"}
+        group = {
+            "id": group_id,
+            "slug": "mesh-general",
+            "name": "Mesh General",
+            "description": None,
+            "is_dm": False,
+            "visibility": "public",
+            "join_policy": "open",
+            "required_capabilities": [],
+            "creator_agent_id": peer_id,
+            "creator_user_id": None,
+            "last_seq": 2,
+            "member_count": 2,
+            "created_at": created,
+        }
+        board = {"id": board_id, "slug": "rfcs", "name": "RFCs", "description": None, "post_count": 1, "created_at": created}
+        post = {
+            "id": post_id,
+            "board_id": board_id,
+            "author_agent_id": peer_id,
+            "client_req_id": "p1",
+            "title": "Protocol RFC",
+            "content": "Discuss the protocol",
+            "mention_agent_ids": [],
+            "comment_count": 1,
+            "last_activity_at": created,
+            "created_at": created,
+        }
+        comment = {
+            "id": comment_id,
+            "post_id": post_id,
+            "seq": 1,
+            "author_agent_id": peer_id,
+            "client_req_id": "c1",
+            "parent_comment_id": None,
+            "content": "Looks good",
+            "mention_agent_ids": [],
+            "created_at": created,
+        }
+        message = {
+            "id": message_id,
+            "group_id": group_id,
+            "seq": 2,
+            "sender_agent_id": peer_id,
+            "client_msg_id": "m1",
+            "content": "hello",
+            "reply_to_msg_id": None,
+            "mention_agent_ids": [],
+            "created_at": created,
+        }
+        dm_request = {
+            "id": dm_request_id,
+            "sender_agent_id": peer_id,
+            "sender_slug": peer["slug"],
+            "sender_display_name": peer["display_name"],
+            "receiver_agent_id": self_id,
+            "receiver_slug": agent["slug"],
+            "receiver_display_name": agent["display_name"],
+            "status": "pending",
+            "request_message": "sync",
+            "dm_group_id": None,
+            "created_at": created,
+            "updated_at": created,
+        }
+        inbox_item = {
+            "inbox_seq": 1,
+            "kind": "post_mention",
+            "source_id": post_id,
+            "group_id": None,
+            "post_id": post_id,
+            "actor_agent_id": peer_id,
+            "summary": "Gamma mentioned",
+            "is_acked": False,
+            "created_at": created,
+        }
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, format, *args):
+                return
+
+            def _reply(self, payload, status=200):
+                raw = json.dumps(payload).encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def _captured_body(self):
+                length = int(self.headers.get("Content-Length", "0"))
+                body = json.loads(self.rfile.read(length).decode("utf-8")) if length else None
+                captured.append((self.command, self.path, body))
+                return body
+
+            def _route(self):
+                path = urlparse(self.path).path
+                self._captured_body()
+                if path == "/api/v1/agents/me" and self.command == "PATCH":
+                    return self._reply({"agent": {**agent, "display_name": "Renamed"}})
+                if path == "/api/v1/agents/me":
+                    return self._reply({"agent": agent})
+                if path == "/api/v1/agents":
+                    return self._reply({"agents": [agent, peer]})
+                if path == "/api/v1/agents/search":
+                    return self._reply({"agents": [peer], "next_cursor": "next", "has_more": True})
+                if path == f"/api/v1/agents/by-slug/{peer['slug']}":
+                    return self._reply({"agent": peer})
+                if "/api/v1/agents/me/follows/" in path or "/api/v1/agents/me/board-subscriptions/" in path:
+                    return self._reply({"ok": True})
+                if path == "/api/v1/agents/me/feed":
+                    return self._reply({"board_id": None, "posts": [post], "next_cursor": None, "has_more": False})
+                if path == "/api/v1/agents/me/home":
+                    return self._reply({"feed": {"posts": [post]}, "inbox": {"items": [inbox_item]}, "pending_dm_requests": [dm_request]})
+                if path == "/api/v1/groups" and self.command == "GET":
+                    return self._reply({"groups": [group]})
+                if path == "/api/v1/groups" and self.command == "POST":
+                    return self._reply({"group": group}, 201)
+                if path == f"/api/v1/groups/{group_id}/members":
+                    return self._reply({"group_id": group_id, "members": [agent, peer]})
+                if path == f"/api/v1/groups/{group_id}/join":
+                    return self._reply({"group": group})
+                if path == f"/api/v1/groups/{group_id}/messages" and self.command == "POST":
+                    return self._reply({"message": message}, 201)
+                if path == f"/api/v1/groups/{group_id}/messages":
+                    return self._reply({"group_id": group_id, "messages": [message], "has_more": False})
+                if path == "/api/v1/boards":
+                    return self._reply({"boards": [board], "hidden_platform_count": 0, "next_cursor": None, "has_more": False})
+                if path == f"/api/v1/boards/{board_id}/posts" and self.command == "POST":
+                    return self._reply({"post": post}, 201)
+                if path == f"/api/v1/boards/{board_id}/posts":
+                    return self._reply({"board_id": board_id, "posts": [post], "next_cursor": "next", "has_more": True})
+                if path == f"/api/v1/posts/{post_id}":
+                    return self._reply({"post": post})
+                if path == f"/api/v1/posts/{post_id}/comments" and self.command == "POST":
+                    return self._reply({"comment": comment, "post_comment_count": 2}, 201)
+                if path == f"/api/v1/posts/{post_id}/comments":
+                    return self._reply({"post_id": post_id, "comments": [comment], "next_cursor": None, "has_more": False})
+                if path == "/api/v1/posts" or path.startswith("/api/v1/posts?"):
+                    return self._reply({"board_id": None, "posts": [post], "next_cursor": None, "has_more": False})
+                if path == f"/api/v1/dm/requests/{dm_request_id}/respond":
+                    return self._reply({"request": {**dm_request, "status": "accepted", "dm_group_id": dm_group_id}})
+                if path == "/api/v1/dm/requests" and self.command == "POST":
+                    return self._reply({"request": dm_request}, 201)
+                if path == "/api/v1/dm/requests":
+                    return self._reply({"requests": [dm_request]})
+                if path == "/api/v1/dm/sessions":
+                    return self._reply({"sessions": [{"group_id": dm_group_id, "slug": "dm-hermes-openclaw", "peer_agent_id": peer_id}]})
+                if path == "/api/v1/inbox/ack":
+                    return self._reply({"acked_inbox_seq": 1})
+                if path == "/api/v1/inbox":
+                    return self._reply({"items": [inbox_item], "next_after_inbox_seq": 1, "acked_inbox_seq": 1, "has_more": False})
+                return self._reply({"error": {"code": "not_found", "message": "not found"}}, 404)
+
+            def do_GET(self):
+                self._route()
+
+            def do_POST(self):
+                self._route()
+
+            def do_PATCH(self):
+                self._route()
+
+            def do_PUT(self):
+                self._route()
+
+            def do_DELETE(self):
+                self._route()
+
+        srv = HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=srv.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = AgentMeshClient(AgentMeshConfig(base_url=f"http://127.0.0.1:{srv.server_port}", token="amesh_tok"))
+            me = client.whoami()
+            self.assertEqual(me["agent"]["id"], self_id)
+            self.assertEqual(len(me["directory"]), 2)
+
+            client.update_profile(display_name="Renamed", description=" Coordinate ", capabilities=["python"])
+            with self.assertRaises(ValueError):
+                client.update_profile()
+            self.assertEqual(len(client.list_agents()), 2)
+            self.assertTrue(client.find_agents(q="alpha", framework="openclaw", capability="research", limit=10)["has_more"])
+            self.assertEqual(client.follow_agent(f"@{peer['slug']}", True), {"agent_id": peer_id, "following": True})
+            self.assertEqual(client.follow_agent(peer_id, False), {"agent_id": peer_id, "following": False})
+            self.assertEqual(client.subscribe_board("rfcs", True), {"board_id": board_id, "subscribed": True})
+            self.assertEqual(client.subscribe_board(board_id, False), {"board_id": board_id, "subscribed": False})
+            self.assertEqual(len(client.read_feed(cursor="next", limit=10)["posts"]), 1)
+            self.assertEqual(len(client.read_home()["pending_dm_requests"]), 1)
+            self.assertEqual(client.list_groups(), [group])
+            created_group = client.create_group(
+                slug="task",
+                name="Task",
+                description="Work",
+                join_policy="capability_restricted",
+                required_capabilities=["python"],
+                members=[f"@{peer['slug']}"],
+            )
+            self.assertEqual(created_group["group"]["id"], group_id)
+            self.assertEqual(len(client.group_members("mesh-general")["members"]), 2)
+            self.assertEqual(client.join_group(group_id)["group"]["id"], group_id)
+            self.assertFalse(client.request_dm(f"@{peer['slug']}", message=" sync ")["already_existed"])
+            self.assertEqual(client.respond_dm_request(dm_request_id, "accept")["request"]["status"], "accepted")
+            self.assertEqual(client.list_dm_requests("pending"), [dm_request])
+            self.assertEqual(client.list_dm_requests(), [dm_request])
+            self.assertEqual(len(client.list_dm_sessions()), 1)
+            self.assertEqual(client.read_group_messages("mesh-general", after_seq=0, before_seq=3, limit=20)["messages"], [message])
+            sent = client.send_group_message("mesh-general", "hello", client_msg_id="m1", reply_to_msg_id=message_id, mentions=[peer_id])
+            self.assertFalse(sent["idempotent_reused"])
+            self.assertEqual(client.list_forum_boards(), [board])
+            self.assertTrue(client.list_forum_posts("rfcs", sort="active", cursor="next", limit=10)["has_more"])
+            detail = client.read_forum_post(post_id, limit=20)
+            self.assertEqual(detail["post"]["id"], post_id)
+            self.assertEqual(detail["comments"], [comment])
+            created_post = client.create_forum_post("rfcs", "Protocol RFC", "Discuss the protocol", client_req_id="p1", mentions=[f"@{peer['slug']}"])
+            self.assertEqual(created_post["post"]["id"], post_id)
+            created_comment = client.create_forum_comment(post_id, "Looks good", client_req_id="c1", parent_comment_id=comment_id, mentions=[peer_id])
+            self.assertEqual(created_comment["post_comment_count"], 2)
+            self.assertEqual(client.search_posts("protocol", board="rfcs", limit=10)["posts"], [post])
+            self.assertEqual(client.poll_inbox(after_inbox_seq=0, unread_only=True, limit=20)["items"], [inbox_item])
+            self.assertEqual(client.ack_inbox(1), {"acked_inbox_seq": 1})
+
+            with self.assertRaises(ValueError):
+                client.follow_agent(peer_id, "yes")
+            with self.assertRaises(ValueError):
+                client.list_dm_requests("unknown")
+            with self.assertRaises(ValueError):
+                client.list_forum_posts("rfcs", sort="hot")
+            with self.assertRaises(ValueError):
+                client.read_group_messages("mesh-general", limit=101)
+            with self.assertRaises(ValueError):
+                client.request_dm("")
+            with self.assertRaises(ValueError):
+                client.ack_inbox(-1)
+
+            error_client = AgentMeshClient(AgentMeshConfig(base_url=f"http://127.0.0.1:{srv.server_port}", token="amesh_tok"))
+            with self.assertRaises(PKG.client.AgentMeshApiError) as caught:
+                error_client._request_with_status("GET", "/api/v1/missing")
+            self.assertEqual(caught.exception.status, 404)
+            self.assertEqual(caught.exception.code, "not_found")
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
     def test_daemon_catches_up_filters_self_and_persists_cursor(self) -> None:
         self_id = "11111111-1111-4111-8111-111111111111"
         peer_id = "22222222-2222-4222-8222-222222222222"
