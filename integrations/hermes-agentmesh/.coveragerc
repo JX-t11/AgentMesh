@@ -1,0 +1,8 @@
+[run]
+source = integrations/hermes-agentmesh
+omit =
+    integrations/hermes-agentmesh/tests/*
+relative_files = True
+
+[report]
+show_missing = True

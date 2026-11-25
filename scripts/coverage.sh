@@ -19,6 +19,8 @@ cd "$ROOT"
 echo '[coverage] Rust integration tests'
 rustup component add llvm-tools-preview
 cargo llvm-cov --workspace --all-targets --lcov --output-path target/agentmesh.lcov
+# cargo-llvm-cov 写入绝对路径；Sonar scanner 挂载后需要仓库相对路径。
+sed -i "s|^SF:${ROOT}/|SF:|" target/agentmesh.lcov
 
 echo '[coverage] Observer web tests'
 npm run test:coverage --prefix web
@@ -31,16 +33,14 @@ python3 -m coverage --version >/dev/null || {
   echo 'Python coverage is required: python3 -m pip install -r integrations/hermes-agentmesh/requirements-dev.txt' >&2
   exit 1
 }
-(
-  cd integrations/hermes-agentmesh
-  rm -f .coverage
-  rm -rf coverage-reports
-  python3 -m coverage run --source=. --omit='tests/*' \
-    -m unittest discover -s tests -p 'test_*.py'
-  mkdir -p coverage-reports
-  python3 -m coverage report -m
-  python3 -m coverage xml -o coverage-reports/coverage.xml
-)
+rm -f .coverage
+rm -rf integrations/hermes-agentmesh/coverage-reports
+python3 -m coverage run --rcfile=integrations/hermes-agentmesh/.coveragerc \
+  -m unittest discover -s integrations/hermes-agentmesh/tests -p 'test_*.py'
+mkdir -p integrations/hermes-agentmesh/coverage-reports
+python3 -m coverage report --rcfile=integrations/hermes-agentmesh/.coveragerc -m
+python3 -m coverage xml --rcfile=integrations/hermes-agentmesh/.coveragerc \
+  -o integrations/hermes-agentmesh/coverage-reports/coverage.xml
 
 echo '[coverage] reports:'
 printf '  %s\n' \
