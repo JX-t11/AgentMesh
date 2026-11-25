@@ -20,7 +20,10 @@ use crate::routes::groups::truncate_summary;
 use crate::routes::inbox::InboxEventView;
 use crate::state::AppState;
 
-use super::{decode_keyset_cursor, encode_keyset_cursor, literal_search_pattern};
+use super::{
+    decode_active_cursor, decode_keyset_cursor, decode_sequence_cursor, encode_active_cursor,
+    encode_keyset_cursor, encode_sequence_cursor, literal_search_pattern,
+};
 
 #[derive(Deserialize)]
 pub struct CreateBoardRequest {
@@ -112,6 +115,7 @@ pub struct PostView {
 pub struct CommentView {
     pub id: Uuid,
     pub post_id: Uuid,
+    pub seq: i64,
     pub author_agent_id: Uuid,
     pub client_req_id: String,
     pub parent_comment_id: Option<Uuid>,
@@ -125,10 +129,19 @@ pub struct BoardEnvelope {
     pub board: BoardView,
 }
 
+#[derive(Deserialize)]
+pub struct ListBoardsQuery {
+    pub cursor: Option<String>,
+    #[serde(default)]
+    pub limit: PageLimit,
+}
+
 #[derive(Serialize)]
 pub struct BoardListResponse {
     pub boards: Vec<BoardView>,
     pub hidden_platform_count: i64,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
 }
 
 #[derive(Serialize)]
@@ -194,6 +207,7 @@ struct CreateCommentCteRow {
     existing_hash: Option<Vec<u8>>,
     comment_id: Option<Uuid>,
     comment_post_id: Option<Uuid>,
+    comment_seq: Option<i64>,
     parent_comment_id: Option<Uuid>,
     content: Option<String>,
     mention_agent_ids: Option<Vec<Uuid>>,
@@ -265,45 +279,65 @@ pub async fn update_board(
 pub async fn list_boards(
     viewer: OptionalViewer,
     State(state): State<AppState>,
+    AppQuery(query): AppQuery<ListBoardsQuery>,
 ) -> Result<Json<BoardListResponse>, AppError> {
-    if viewer.is_platform_authenticated() {
-        let boards = sqlx::query_as::<_, BoardView>(
-            "SELECT b.id, b.slug, b.name, b.description, b.visibility, b.creator_user_id,
-                    COUNT(p.id) AS post_count, b.created_at
-             FROM boards b
-             LEFT JOIN posts p ON p.board_id = b.id AND p.hidden_at IS NULL
-             GROUP BY b.id
-             ORDER BY b.created_at ASC, b.id ASC",
-        )
-        .fetch_all(&state.db)
-        .await?;
-
-        return Ok(Json(BoardListResponse {
-            boards,
-            hidden_platform_count: 0,
-        }));
-    }
-
-    let boards = sqlx::query_as::<_, BoardView>(
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(decode_keyset_cursor)
+        .transpose()?;
+    let mut statement = QueryBuilder::<Postgres>::new(
         "SELECT b.id, b.slug, b.name, b.description, b.visibility, b.creator_user_id,
                 COUNT(p.id) AS post_count, b.created_at
          FROM boards b
-         LEFT JOIN posts p ON p.board_id = b.id
-         WHERE b.visibility = 'public'
-         GROUP BY b.id
-         ORDER BY b.created_at ASC, b.id ASC",
-    )
-    .fetch_all(&state.db)
-    .await?;
+         LEFT JOIN posts p ON p.board_id = b.id AND p.hidden_at IS NULL",
+    );
+    if viewer.is_platform_authenticated() {
+        statement.push(" WHERE TRUE");
+    } else {
+        statement.push(" WHERE b.visibility = 'public'");
+    }
+    if let Some((timestamp, id)) = cursor {
+        statement
+            .push(" AND (b.created_at, b.id) > (")
+            .push_bind(timestamp)
+            .push(", ")
+            .push_bind(id)
+            .push(")");
+    }
+    let limit = query.limit.get();
+    statement
+        .push(" GROUP BY b.id ORDER BY b.created_at ASC, b.id ASC LIMIT ")
+        .push_bind(limit + 1);
+    let mut boards = statement
+        .build_query_as::<BoardView>()
+        .fetch_all(&state.db)
+        .await?;
+    let has_more = boards.len() as i64 > limit;
+    if has_more {
+        boards.pop();
+    }
+    let next_cursor = has_more
+        .then(|| {
+            boards
+                .last()
+                .map(|board| encode_keyset_cursor(board.created_at, board.id))
+        })
+        .flatten();
 
-    let hidden_platform_count: i64 =
+    let hidden_platform_count: i64 = if viewer.is_platform_authenticated() {
+        0
+    } else {
         sqlx::query_scalar("SELECT COUNT(*) FROM boards WHERE visibility = 'platform'")
             .fetch_one(&state.db)
-            .await?;
+            .await?
+    };
 
     Ok(Json(BoardListResponse {
         boards,
         hidden_platform_count,
+        next_cursor,
+        has_more,
     }))
 }
 
@@ -498,10 +532,18 @@ async fn query_posts(
     scope: PostScope,
     query: ListBoardPostsQuery,
 ) -> Result<PostListResponse, AppError> {
+    enum PostPageCursor {
+        Active(Vec<Uuid>),
+        Timestamp(DateTime<Utc>, Uuid),
+    }
     let cursor = query
         .cursor
         .as_deref()
-        .map(decode_keyset_cursor)
+        .map(|encoded| match query.sort {
+            PostSortOrder::Active => decode_active_cursor(encoded).map(PostPageCursor::Active),
+            PostSortOrder::Newest => decode_keyset_cursor(encoded)
+                .map(|(timestamp, id)| PostPageCursor::Timestamp(timestamp, id)),
+        })
         .transpose()?;
     let sort_column = match query.sort {
         PostSortOrder::Active => "p.last_activity_at",
@@ -512,6 +554,7 @@ async fn query_posts(
                 p.mention_agent_ids, p.comment_count, p.last_activity_at, p.created_at
          FROM posts p",
     );
+
     let board_id = match scope {
         PostScope::Visible {
             platform_authenticated,
@@ -550,15 +593,25 @@ async fn query_posts(
             .push_bind(pattern)
             .push(")");
     }
-    if let Some((timestamp, id)) = cursor {
-        statement
-            .push(" AND (")
-            .push(sort_column)
-            .push(", p.id) < (")
-            .push_bind(timestamp)
-            .push(", ")
-            .push_bind(id)
-            .push(")");
+    if let Some(page_cursor) = &cursor {
+        match page_cursor {
+            PostPageCursor::Active(seen_ids) => {
+                statement
+                    .push(" AND p.id <> ALL(")
+                    .push_bind(seen_ids)
+                    .push(")");
+            }
+            PostPageCursor::Timestamp(boundary_ts, boundary_id) => {
+                statement
+                    .push(" AND (")
+                    .push(sort_column)
+                    .push(", p.id) < (")
+                    .push_bind(boundary_ts)
+                    .push(", ")
+                    .push_bind(boundary_id)
+                    .push(")");
+            }
+        }
     }
     let limit = query.limit.get();
     statement
@@ -571,6 +624,9 @@ async fn query_posts(
         .fetch_all(&state.db)
         .await?;
     let has_more = posts.len() as i64 > limit;
+    if has_more {
+        posts.pop();
+    }
     let next_cursor = if has_more {
         posts.pop();
         posts.last().map(|post| {
@@ -762,7 +818,7 @@ pub async fn list_post_comments(
     ensure_post_visible(&state, post_id, &viewer).await?;
 
     let decoded_cursor = match query.cursor.as_deref() {
-        Some(raw) => Some(decode_keyset_cursor(raw)?),
+        Some(raw) => Some(decode_sequence_cursor(raw)?),
         None => None,
     };
 
@@ -770,11 +826,11 @@ pub async fn list_post_comments(
     let mut comments = match decoded_cursor {
         None => {
             sqlx::query_as::<_, CommentView>(
-                "SELECT id, post_id, author_agent_id, client_req_id, parent_comment_id,
+                "SELECT id, post_id, comment_seq AS seq, author_agent_id, client_req_id, parent_comment_id,
                         content, mention_agent_ids, created_at
                  FROM comments
                  WHERE post_id = $1 AND hidden_at IS NULL
-                 ORDER BY created_at ASC, id ASC
+                 ORDER BY comment_seq ASC, id ASC
                  LIMIT $2",
             )
             .bind(post_id)
@@ -782,19 +838,18 @@ pub async fn list_post_comments(
             .fetch_all(&state.db)
             .await?
         }
-        Some((cursor_ts, cursor_id)) => {
+        Some((cursor_seq, _cursor_id)) => {
             sqlx::query_as::<_, CommentView>(
-                "SELECT id, post_id, author_agent_id, client_req_id, parent_comment_id,
+                "SELECT id, post_id, comment_seq AS seq, author_agent_id, client_req_id, parent_comment_id,
                         content, mention_agent_ids, created_at
                  FROM comments
-                 WHERE post_id = $1
-                   AND (created_at, id) > ($2, $3)
-                 ORDER BY created_at ASC, id ASC
-                 LIMIT $4",
+                 WHERE post_id = $1 AND hidden_at IS NULL
+                   AND comment_seq > $2
+                 ORDER BY comment_seq ASC, id ASC
+                 LIMIT $3",
             )
             .bind(post_id)
-            .bind(cursor_ts)
-            .bind(cursor_id)
+            .bind(cursor_seq)
             .bind(fetch_limit)
             .fetch_all(&state.db)
             .await?
@@ -809,7 +864,7 @@ pub async fn list_post_comments(
     let next_cursor = if has_more {
         comments
             .last()
-            .map(|last| encode_keyset_cursor(last.created_at, last.id))
+            .map(|last| encode_sequence_cursor(last.seq, last.id))
     } else {
         None
     };
@@ -946,14 +1001,16 @@ async fn execute_create_comment_cte(
 ) -> Result<CreateCommentCteRow, sqlx::Error> {
     sqlx::query_as::<_, CreateCommentCteRow>(
         "WITH tgt_post AS (
-             SELECT p.id, p.author_agent_id, p.comment_count, b.visibility AS board_visibility
+             SELECT p.id, p.author_agent_id, p.comment_count, p.next_comment_seq,
+                    b.visibility AS board_visibility
              FROM posts p
              JOIN boards b ON b.id = p.board_id
              WHERE p.id = $2 AND p.hidden_at IS NULL
+             FOR UPDATE OF p
          ),
          existing AS (
              SELECT c.id, c.post_id, c.payload_hash, c.parent_comment_id,
-                    c.content, c.mention_agent_ids, c.created_at,
+                    c.content, c.mention_agent_ids, c.created_at, c.comment_seq,
                     p.comment_count AS existing_post_comment_count
              FROM comments c
              JOIN posts p ON p.id = c.post_id
@@ -986,16 +1043,18 @@ async fn execute_create_comment_cte(
          inserted_comment AS (
              INSERT INTO comments (
                  id, post_id, author_agent_id, client_req_id, payload_hash,
-                 parent_comment_id, content, mention_agent_ids
+                 parent_comment_id, content, mention_agent_ids, comment_seq
              )
-             SELECT $1, $2, $3, $4, $5, $6, $7, $8
+             SELECT $1, $2, $3, $4, $5, $6, $7, $8, tp.next_comment_seq
              FROM can_insert ci
+             CROSS JOIN tgt_post tp
              WHERE ci.go
-             RETURNING id, post_id, parent_comment_id, content, mention_agent_ids, created_at
+             RETURNING id, post_id, comment_seq, parent_comment_id, content, mention_agent_ids, created_at
          ),
          updated_post AS (
              UPDATE posts p
              SET comment_count = p.comment_count + 1,
+                 next_comment_seq = p.next_comment_seq + 1,
                  last_activity_at = GREATEST(p.last_activity_at, ic.created_at)
              FROM inserted_comment ic
              WHERE p.id = $2
@@ -1050,6 +1109,7 @@ async fn execute_create_comment_cte(
              (SELECT payload_hash FROM existing) AS existing_hash,
              COALESCE((SELECT id FROM inserted_comment), (SELECT id FROM existing)) AS comment_id,
              COALESCE((SELECT post_id FROM inserted_comment), (SELECT post_id FROM existing)) AS comment_post_id,
+             COALESCE((SELECT comment_seq FROM inserted_comment), (SELECT comment_seq FROM existing)) AS comment_seq,
              COALESCE((SELECT parent_comment_id FROM inserted_comment), (SELECT parent_comment_id FROM existing)) AS parent_comment_id,
              COALESCE((SELECT content FROM inserted_comment), (SELECT content FROM existing)) AS content,
              COALESCE((SELECT mention_agent_ids FROM inserted_comment), (SELECT mention_agent_ids FROM existing)) AS mention_agent_ids,
@@ -1145,6 +1205,7 @@ async fn resolve_concurrent_idempotent_comment(
     struct ExistingCommentRow {
         id: Uuid,
         post_id: Uuid,
+        seq: i64,
         author_agent_id: Uuid,
         client_req_id: String,
         payload_hash: Vec<u8>,
@@ -1156,7 +1217,7 @@ async fn resolve_concurrent_idempotent_comment(
     }
 
     let row = sqlx::query_as::<_, ExistingCommentRow>(
-        "SELECT c.id, c.post_id, c.author_agent_id, c.client_req_id, c.payload_hash,
+        "SELECT c.id, c.post_id, c.comment_seq AS seq, c.author_agent_id, c.client_req_id, c.payload_hash,
                 c.parent_comment_id, c.content, c.mention_agent_ids, c.created_at,
                 p.comment_count AS post_comment_count
          FROM comments c
@@ -1180,6 +1241,7 @@ async fn resolve_concurrent_idempotent_comment(
             comment: CommentView {
                 id: row.id,
                 post_id: row.post_id,
+                seq: row.seq,
                 author_agent_id: row.author_agent_id,
                 client_req_id: row.client_req_id,
                 parent_comment_id: row.parent_comment_id,
@@ -1235,6 +1297,9 @@ fn extract_comment_from_cte_row(
         post_id: row
             .comment_post_id
             .ok_or_else(|| AppError::Internal("missing post_id from CTE".into()))?,
+        seq: row
+            .comment_seq
+            .ok_or_else(|| AppError::Internal("missing comment_seq from CTE".into()))?,
         author_agent_id,
         client_req_id: client_req_id.to_owned(),
         parent_comment_id: row.parent_comment_id,

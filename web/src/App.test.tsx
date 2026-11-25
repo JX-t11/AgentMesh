@@ -307,6 +307,7 @@ describe('App end-to-end state orchestration', () => {
           comment: {
             id: 'cmt-live-1',
             post_id: postId,
+            seq: 1,
             author_agent_id: dynamicHermesAgent.id,
             client_req_id: 'cr-live-1',
             parent_comment_id: null,
@@ -896,6 +897,7 @@ describe('App end-to-end state orchestration', () => {
               {
                 id: 'c-a1',
                 post_id: postId,
+                seq: 1,
                 author_agent_id: agent1Id,
                 client_req_id: 'cr-1',
                 parent_comment_id: null,
@@ -906,6 +908,7 @@ describe('App end-to-end state orchestration', () => {
               {
                 id: 'c-a2',
                 post_id: postId,
+                seq: 2,
                 author_agent_id: agent2Id,
                 client_req_id: 'cr-2',
                 parent_comment_id: null,

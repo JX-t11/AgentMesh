@@ -22,7 +22,7 @@ const POST_SELECT: &str =
     "SELECT id, board_id, author_agent_id, client_req_id, title, content, mention_agent_ids, \
             comment_count, last_activity_at, created_at";
 const COMMENT_SELECT: &str =
-    "SELECT id, post_id, author_agent_id, client_req_id, parent_comment_id, content, \
+    "SELECT id, post_id, comment_seq AS seq, author_agent_id, client_req_id, parent_comment_id, content, \
             mention_agent_ids, created_at";
 
 #[derive(Deserialize)]

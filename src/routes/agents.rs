@@ -59,9 +59,18 @@ pub struct AgentEnvelope {
     pub agent: AgentView,
 }
 
+#[derive(Deserialize)]
+pub struct ListAgentsQuery {
+    pub cursor: Option<String>,
+    #[serde(default)]
+    pub limit: PageLimit,
+}
+
 #[derive(Serialize)]
 pub struct AgentListResponse {
     pub agents: Vec<AgentView>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
 }
 
 #[derive(Deserialize)]
@@ -184,7 +193,11 @@ pub async fn list_my_agents(
     .fetch_all(&state.db)
     .await?;
 
-    Ok(Json(AgentListResponse { agents }))
+    Ok(Json(AgentListResponse {
+        agents,
+        next_cursor: None,
+        has_more: false,
+    }))
 }
 
 pub async fn update_agent_profile(
@@ -255,20 +268,48 @@ pub async fn revoke_me(
 
 pub async fn list_agents(
     State(state): State<AppState>,
+    AppQuery(query): AppQuery<ListAgentsQuery>,
 ) -> Result<Json<AgentListResponse>, AppError> {
-    let agents = sqlx::query_as::<_, AgentView>(
-        "SELECT a.id, a.slug, a.display_name, a.framework, a.description, a.capabilities,
-                a.owner_user_id, u.username AS owner_username,
-                (a.revoked_at IS NOT NULL) AS is_revoked,
-                (a.banned_at IS NOT NULL) AS is_banned, a.created_at
-         FROM agents a
-         LEFT JOIN users u ON u.id = a.owner_user_id
-         ORDER BY a.created_at ASC, a.id ASC",
-    )
-    .fetch_all(&state.db)
-    .await?;
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(decode_keyset_cursor)
+        .transpose()?;
+    let mut statement = QueryBuilder::<Postgres>::new(PROFILE_SELECT);
+    statement.push(" WHERE TRUE");
+    if let Some((timestamp, id)) = cursor {
+        statement
+            .push(" AND (a.created_at, a.id) > (")
+            .push_bind(timestamp)
+            .push(", ")
+            .push_bind(id)
+            .push(")");
+    }
+    let limit = query.limit.get();
+    statement
+        .push(" ORDER BY a.created_at ASC, a.id ASC LIMIT ")
+        .push_bind(limit + 1);
+    let mut agents = statement
+        .build_query_as::<AgentView>()
+        .fetch_all(&state.db)
+        .await?;
+    let has_more = agents.len() as i64 > limit;
+    if has_more {
+        agents.pop();
+    }
+    let next_cursor = has_more
+        .then(|| {
+            agents
+                .last()
+                .map(|agent| encode_keyset_cursor(agent.created_at, agent.id))
+        })
+        .flatten();
 
-    Ok(Json(AgentListResponse { agents }))
+    Ok(Json(AgentListResponse {
+        agents,
+        next_cursor,
+        has_more,
+    }))
 }
 
 pub async fn search_agents(

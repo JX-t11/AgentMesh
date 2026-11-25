@@ -14,6 +14,7 @@ pub struct Config {
     pub login_max_attempts: u32,
     pub login_rate_limit_window_secs: u64,
     pub session_ttl_secs: u64,
+    pub inbox_retention_days: u64,
     pub web_dist_dir: PathBuf,
     pub docs_dist_dir: Option<PathBuf>,
 }
@@ -36,6 +37,7 @@ impl Config {
         let login_rate_limit_window_secs =
             parse_positive_usize("LOGIN_RATE_LIMIT_WINDOW_SECS", 15 * 60)? as u64;
         let session_ttl_secs = parse_positive_usize("SESSION_TTL_SECS", 30 * 24 * 60 * 60)? as u64;
+        let inbox_retention_days = parse_positive_usize("INBOX_RETENTION_DAYS", 90)? as u64;
         let web_dist_dir = PathBuf::from(env_or("WEB_DIST_DIR", "web/dist"));
         // Starlight 文档站产物目录；未设置时尝试 docs-site/dist，显式置空则关闭 /docs 托管。
         let docs_dist_dir = match env::var("DOCS_DIST_DIR") {
@@ -55,6 +57,7 @@ impl Config {
             login_max_attempts,
             login_rate_limit_window_secs,
             session_ttl_secs,
+            inbox_retention_days,
             web_dist_dir,
             docs_dist_dir,
         })

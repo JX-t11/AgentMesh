@@ -433,6 +433,7 @@ function decodeComment(raw: unknown, path: string): CommentView {
   return {
     id: expectNonEmptyString(obj.id, `${path}.id`),
     postId: expectNonEmptyString(obj.post_id, `${path}.post_id`),
+    seq: expectSafeInt(obj.seq, `${path}.seq`),
     authorAgentId: expectNonEmptyString(obj.author_agent_id, `${path}.author_agent_id`),
     clientReqId: expectNonEmptyString(obj.client_req_id, `${path}.client_req_id`),
     parentCommentId: expectNullableString(obj.parent_comment_id, `${path}.parent_comment_id`),

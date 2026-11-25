@@ -8,7 +8,7 @@ pub mod inbox;
 mod social;
 pub mod ws;
 
-use axum::extract::DefaultBodyLimit;
+use axum::extract::{DefaultBodyLimit, State};
 use axum::http::header;
 use axum::response::Redirect;
 use axum::routing::{delete, get, patch, post, put};
@@ -23,6 +23,7 @@ use tower_http::trace::TraceLayer;
 use uuid::Uuid;
 
 use crate::error::AppError;
+use crate::observability;
 use crate::state::AppState;
 
 const LEGACY_DOCS_REDIRECTS: [(&str, &str); 6] = [
@@ -40,6 +41,7 @@ pub fn build_router(state: AppState) -> Router {
 
     let api_router = Router::new()
         .route("/v1/health", get(health))
+        .route("/v1/admin/metrics", get(observability::metrics))
         .route("/v1/auth/register", post(auth::register_user))
         .route("/v1/auth/login", post(auth::login_user))
         .route("/v1/auth/me", get(auth::get_current_user))
@@ -264,11 +266,20 @@ pub fn build_router(state: AppState) -> Router {
         .layer(DefaultBodyLimit::max(max_body))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::observability::track_http,
+        ))
+        .layer(axum::middleware::from_fn(crate::observability::request_id))
         .with_state(state)
 }
 
-async fn health() -> Json<Value> {
-    Json(json!({ "status": "ok" }))
+async fn health(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
+    sqlx::query_scalar::<_, i32>("SELECT 1")
+        .fetch_one(&state.db)
+        .await
+        .map_err(|error| AppError::Internal(error.to_string()))?;
+    Ok(Json(json!({ "status": "ok" })))
 }
 
 async fn api_not_found() -> AppError {
@@ -278,6 +289,61 @@ async fn api_not_found() -> AppError {
 fn encode_keyset_cursor(timestamp: DateTime<Utc>, id: Uuid) -> String {
     let raw = format!("{}:{id}", timestamp.timestamp_micros());
     URL_SAFE_NO_PAD.encode(raw.as_bytes())
+}
+
+pub(crate) fn encode_sequence_cursor(sequence: i64, id: Uuid) -> String {
+    let raw = format!("cs:{sequence}:{id}");
+    URL_SAFE_NO_PAD.encode(raw.as_bytes())
+}
+
+pub(crate) fn decode_sequence_cursor(encoded: &str) -> Result<(i64, Uuid), AppError> {
+    let decoded = URL_SAFE_NO_PAD
+        .decode(encoded)
+        .map_err(|_| AppError::BadRequest("invalid pagination cursor".into()))?;
+    let raw = std::str::from_utf8(&decoded)
+        .map_err(|_| AppError::BadRequest("invalid pagination cursor utf8".into()))?;
+    let body = raw
+        .strip_prefix("cs:")
+        .ok_or_else(|| AppError::BadRequest("invalid comment pagination cursor".into()))?;
+    let (sequence_str, id_str) = body
+        .split_once(':')
+        .ok_or_else(|| AppError::BadRequest("malformed pagination cursor".into()))?;
+    let sequence = sequence_str
+        .parse::<i64>()
+        .map_err(|_| AppError::BadRequest("invalid cursor sequence".into()))?;
+    if sequence < 0 {
+        return Err(AppError::BadRequest("invalid cursor sequence".into()));
+    }
+    let id =
+        Uuid::parse_str(id_str).map_err(|_| AppError::BadRequest("invalid cursor uuid".into()))?;
+    Ok((sequence, id))
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ActivePostCursor {
+    seen: Vec<Uuid>,
+}
+
+pub(crate) fn encode_active_cursor(seen_ids: &[Uuid]) -> String {
+    let cursor = ActivePostCursor {
+        seen: seen_ids.to_vec(),
+    };
+    let raw = serde_json::to_vec(&cursor).unwrap_or_default();
+    URL_SAFE_NO_PAD.encode(raw)
+}
+
+pub(crate) fn decode_active_cursor(encoded: &str) -> Result<Vec<Uuid>, AppError> {
+    let decoded = URL_SAFE_NO_PAD
+        .decode(encoded)
+        .map_err(|_| AppError::BadRequest("invalid pagination cursor".into()))?;
+    let cursor: ActivePostCursor = serde_json::from_slice(&decoded)
+        .map_err(|_| AppError::BadRequest("invalid active pagination cursor".into()))?;
+    if cursor.seen.len() > 10_000 || cursor.seen.iter().any(|id| id.is_nil()) {
+        return Err(AppError::BadRequest(
+            "invalid active pagination cursor".into(),
+        ));
+    }
+    Ok(cursor.seen)
 }
 
 fn decode_keyset_cursor(encoded: &str) -> Result<(DateTime<Utc>, Uuid), AppError> {

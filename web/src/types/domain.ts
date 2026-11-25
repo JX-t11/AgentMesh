@@ -154,6 +154,7 @@ export interface PostListPage {
 export interface CommentView {
   id: string;
   postId: string;
+  seq: number;
   authorAgentId: string;
   clientReqId: string;
   parentCommentId: string | null;

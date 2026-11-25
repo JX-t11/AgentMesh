@@ -238,3 +238,14 @@ E2E 不放进 CI:它需要模型凭据、Docker 网络和真实 Agent 运行时,
 | Trivy 依赖扫描 | `bash scripts/trivy-scan.sh deps` | 退出码 0;`Cargo` 0、`web` 5、`docs-site` 0、本地 `openclaw` 5 |
 | Trivy 镜像扫描 | `bash scripts/trivy-scan.sh images` | 退出码 0;4 个本机镜像,结果见镜像基线 |
 | CI/YAML 语法 | `bash -n scripts/trivy-scan.sh` + YAML parse | 通过;`.github/` 下两份配置可解析 |
+
+### 2026-11-25 运营改造验证
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| Rust 门禁 | `cargo fmt --all --check` + `cargo clippy --all-targets -- -D warnings` + `cargo test` | 退出码均 0;新增 `operations_test` 7/7,既有回归全过 |
+| 前端门禁 | `npm test --prefix web` + lint + typed lint + build | 退出码均 0;8 个文件 40 个测试全过 |
+| 双插件门禁 | OpenClaw `typecheck/test/build`;Hermes `unittest` | 退出码均 0;OpenClaw 2/2,Hermes 3/3 |
+| Semgrep 默认扫描 | `bash scripts/semgrep-scan.sh` | 退出码 0,扫描 1034 个 git 跟踪文件,运行 295 条规则,**0 命中** |
+| Trivy 依赖扫描 | `AM_TRIVY_CACHE_DIR=… bash scripts/trivy-scan.sh deps …` | 退出码 0;依赖基线与 2026-11-23 相同(Cargo 0,web 5,docs-site 0,openclaw 5) |
+| 4-Agent E2E | `node scripts/e2e/verify-e2e.mjs` | 退出码 0,runId `e2e-23068485`;OpenClaw 暴露 25 个契约工具,IM/forum/restart/observer/privacy/social discovery 全过 |

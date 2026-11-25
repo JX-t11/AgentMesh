@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use sqlx::types::Json as SqlxJson;
-use sqlx::FromRow;
+use sqlx::{FromRow, Postgres, QueryBuilder};
 use uuid::Uuid;
 
 use crate::auth::{AgentAuth, AgentOrOwnerAuth, OptionalViewer};
@@ -18,6 +18,8 @@ use crate::error::{AppError, AppJson, AppQuery};
 use crate::events::{encode_event, AgentSignal};
 use crate::routes::inbox::InboxEventView;
 use crate::state::AppState;
+
+use super::{decode_keyset_cursor, encode_keyset_cursor};
 
 #[derive(Deserialize)]
 pub struct CreateGroupRequest {
@@ -104,9 +106,18 @@ pub struct GroupEnvelope {
     pub group: GroupView,
 }
 
+#[derive(Deserialize)]
+pub struct ListGroupsQuery {
+    pub cursor: Option<String>,
+    #[serde(default)]
+    pub limit: PageLimit,
+}
+
 #[derive(Serialize)]
 pub struct GroupListResponse {
     pub groups: Vec<GroupView>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
 }
 
 #[derive(Serialize)]
@@ -380,91 +391,82 @@ pub async fn remove_group_member(
 pub async fn list_groups(
     viewer: OptionalViewer,
     State(state): State<AppState>,
+    AppQuery(query): AppQuery<ListGroupsQuery>,
 ) -> Result<Json<GroupListResponse>, AppError> {
-    let groups = match viewer {
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(decode_keyset_cursor)
+        .transpose()?;
+    let mut statement = QueryBuilder::<Postgres>::new(
+        "SELECT g.id, g.slug, g.name, g.description, g.is_dm, g.visibility,
+                g.join_policy, g.required_capabilities, g.creator_user_id, g.creator_agent_id,
+                g.last_seq, COUNT(gm.agent_id) AS member_count, g.created_at
+         FROM groups g
+         LEFT JOIN group_members gm ON gm.group_id = g.id",
+    );
+
+    match &viewer {
         OptionalViewer::Anonymous => {
-            sqlx::query_as::<_, GroupView>(
-                "SELECT g.id, g.slug, g.name, g.description, g.is_dm, g.visibility,
-                        g.join_policy, g.required_capabilities, g.creator_user_id, g.creator_agent_id,
-                        g.last_seq, COUNT(gm.agent_id) AS member_count, g.created_at
-                 FROM groups g
-                 LEFT JOIN group_members gm ON gm.group_id = g.id
-                 WHERE g.is_dm = FALSE AND g.visibility = 'public'
-                 GROUP BY g.id
-                 ORDER BY g.created_at ASC, g.id ASC",
-            )
-            .fetch_all(&state.db)
-            .await?
+            statement.push(" WHERE g.is_dm = FALSE AND g.visibility = 'public'");
         }
         OptionalViewer::Admin => {
-            sqlx::query_as::<_, GroupView>(
-                "SELECT g.id, g.slug, g.name, g.description, g.is_dm, g.visibility,
-                        g.join_policy, g.required_capabilities, g.creator_user_id, g.creator_agent_id,
-                        g.last_seq, COUNT(gm.agent_id) AS member_count, g.created_at
-                 FROM groups g
-                 LEFT JOIN group_members gm ON gm.group_id = g.id
-                 WHERE g.is_dm = FALSE
-                 GROUP BY g.id
-                 ORDER BY g.created_at ASC, g.id ASC",
-            )
-            .fetch_all(&state.db)
-            .await?
+            statement.push(" WHERE g.is_dm = FALSE");
         }
         OptionalViewer::Agent(agent) => {
-            sqlx::query_as::<_, GroupView>(
-                "SELECT g.id, g.slug, g.name, g.description, g.is_dm, g.visibility,
-                        g.join_policy, g.required_capabilities, g.creator_user_id, g.creator_agent_id,
-                        g.last_seq, COUNT(gm.agent_id) AS member_count, g.created_at
-                 FROM groups g
-                 LEFT JOIN group_members gm ON gm.group_id = g.id
-                 WHERE g.is_dm = FALSE
-                   AND (
-                       g.visibility = 'public'
-                       OR g.creator_agent_id = $1
-                       OR EXISTS (
-                           SELECT 1 FROM group_members gm_self
-                           WHERE gm_self.group_id = g.id AND gm_self.agent_id = $1
-                       )
-                   )
-                 GROUP BY g.id
-                 ORDER BY g.created_at ASC, g.id ASC",
-            )
-            .bind(agent.id)
-            .fetch_all(&state.db)
-            .await?
+            statement
+                .push(" WHERE g.is_dm = FALSE AND (g.visibility = 'public' OR g.creator_agent_id = ")
+                .push_bind(agent.id)
+                .push(" OR EXISTS (SELECT 1 FROM group_members gm_self WHERE gm_self.group_id = g.id AND gm_self.agent_id = ")
+                .push_bind(agent.id)
+                .push("))");
         }
         OptionalViewer::User(user) => {
-            sqlx::query_as::<_, GroupView>(
-                "SELECT g.id, g.slug, g.name, g.description, g.is_dm, g.visibility,
-                        g.join_policy, g.required_capabilities, g.creator_user_id, g.creator_agent_id,
-                        g.last_seq, COUNT(gm.agent_id) AS member_count, g.created_at
-                 FROM groups g
-                 LEFT JOIN group_members gm ON gm.group_id = g.id
-                 WHERE g.is_dm = FALSE
-                   AND (
-                       g.visibility = 'public'
-                       OR g.creator_user_id = $1
-                       OR EXISTS (
-                           SELECT 1 FROM agents ca
-                           WHERE ca.id = g.creator_agent_id AND ca.owner_user_id = $1
-                       )
-                       OR EXISTS (
-                           SELECT 1
-                           FROM group_members gm_owned
-                           JOIN agents a_owned ON a_owned.id = gm_owned.agent_id
-                           WHERE gm_owned.group_id = g.id AND a_owned.owner_user_id = $1
-                       )
-                   )
-                 GROUP BY g.id
-                 ORDER BY g.created_at ASC, g.id ASC",
-            )
-            .bind(user.id)
-            .fetch_all(&state.db)
-            .await?
+            statement
+                .push(" WHERE g.is_dm = FALSE AND (g.visibility = 'public' OR g.creator_user_id = ")
+                .push_bind(user.id)
+                .push(" OR EXISTS (SELECT 1 FROM agents ca WHERE ca.id = g.creator_agent_id AND ca.owner_user_id = ")
+                .push_bind(user.id)
+                .push(") OR EXISTS (SELECT 1 FROM group_members gm_owned JOIN agents a_owned ON a_owned.id = gm_owned.agent_id WHERE gm_owned.group_id = g.id AND a_owned.owner_user_id = ")
+                .push_bind(user.id)
+                .push("))");
         }
-    };
+    }
 
-    Ok(Json(GroupListResponse { groups }))
+    if let Some((timestamp, id)) = cursor {
+        statement
+            .push(" AND (g.created_at, g.id) > (")
+            .push_bind(timestamp)
+            .push(", ")
+            .push_bind(id)
+            .push(")");
+    }
+
+    let limit = query.limit.get();
+    statement
+        .push(" GROUP BY g.id ORDER BY g.created_at ASC, g.id ASC LIMIT ")
+        .push_bind(limit + 1);
+    let mut groups = statement
+        .build_query_as::<GroupView>()
+        .fetch_all(&state.db)
+        .await?;
+    let has_more = groups.len() as i64 > limit;
+    if has_more {
+        groups.pop();
+    }
+    let next_cursor = has_more
+        .then(|| {
+            groups
+                .last()
+                .map(|group| encode_keyset_cursor(group.created_at, group.id))
+        })
+        .flatten();
+
+    Ok(Json(GroupListResponse {
+        groups,
+        next_cursor,
+        has_more,
+    }))
 }
 
 pub async fn get_group(

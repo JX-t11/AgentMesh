@@ -97,6 +97,7 @@ describe('boundary decoders', () => {
         {
           id: '77777777-7777-7777-7777-777777777777',
           post_id: '66666666-6666-6666-6666-666666666666',
+          seq: 7,
           author_agent_id: '44444444-4444-4444-4444-444444444444',
           client_req_id: 'cmt-1',
           parent_comment_id: null,
@@ -107,6 +108,7 @@ describe('boundary decoders', () => {
       ],
     });
     expect(commentsPage.comments[0]?.parentCommentId).toBeNull();
+    expect(commentsPage.comments[0]?.seq).toBe(7);
 
     const groups = decodeGroupList({
       groups: [

@@ -6,11 +6,13 @@ use sqlx::PgPool;
 
 use crate::auth::{hash_token, AuthCache, LoginRateLimiter};
 use crate::events::EventHub;
+use crate::observability::Metrics;
 
 pub const DEFAULT_MAX_PRIVATE_GROUPS_PER_OWNER: i64 = 3;
 pub const DEFAULT_LOGIN_MAX_ATTEMPTS: u32 = 5;
 pub const DEFAULT_LOGIN_RATE_WINDOW_SECS: u64 = 15 * 60;
 pub const DEFAULT_SESSION_TTL_SECS: u64 = 30 * 24 * 60 * 60;
+pub const DEFAULT_INBOX_RETENTION_DAYS: u64 = 90;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -18,12 +20,14 @@ pub struct AppState {
     pub auth_cache: Arc<AuthCache>,
     pub login_rate_limiter: Arc<LoginRateLimiter>,
     pub events: Arc<EventHub>,
+    pub metrics: Metrics,
     pub admin_token_sha256: [u8; 32],
     pub max_body_bytes: usize,
     pub max_private_groups_per_owner: i64,
     pub login_max_attempts: u32,
     pub login_rate_window: ChronoDuration,
     pub session_ttl: ChronoDuration,
+    pub inbox_retention: ChronoDuration,
     pub web_dist_dir: Option<PathBuf>,
     pub docs_dist_dir: Option<PathBuf>,
 }
@@ -41,6 +45,7 @@ impl AppState {
             auth_cache: Arc::new(auth_cache),
             login_rate_limiter: Arc::new(LoginRateLimiter::default()),
             events: Arc::new(EventHub::new(broadcast_capacity)),
+            metrics: Metrics::default(),
             admin_token_sha256: hash_token(admin_token),
             max_body_bytes,
             max_private_groups_per_owner: DEFAULT_MAX_PRIVATE_GROUPS_PER_OWNER,
@@ -52,6 +57,11 @@ impl AppState {
             ),
             session_ttl: ChronoDuration::seconds(
                 DEFAULT_SESSION_TTL_SECS.try_into().unwrap_or(i64::MAX),
+            ),
+            inbox_retention: ChronoDuration::seconds(
+                (DEFAULT_INBOX_RETENTION_DAYS * 24 * 60 * 60)
+                    .try_into()
+                    .unwrap_or(i64::MAX),
             ),
             web_dist_dir: None,
             docs_dist_dir: None,
@@ -70,10 +80,34 @@ impl AppState {
         self
     }
 
+    pub fn with_inbox_retention_days(mut self, days: u64) -> Self {
+        self.inbox_retention = ChronoDuration::seconds(
+            (days.saturating_mul(24 * 60 * 60))
+                .try_into()
+                .unwrap_or(i64::MAX),
+        );
+        self
+    }
+
     pub async fn cleanup_expired_user_sessions(&self) -> Result<u64, sqlx::Error> {
         let result = sqlx::query("DELETE FROM user_sessions WHERE expires_at <= NOW()")
             .execute(&self.db)
             .await?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn cleanup_expired_inbox_events(&self) -> Result<u64, sqlx::Error> {
+        let cutoff = chrono::Utc::now() - self.inbox_retention;
+        let result = sqlx::query(
+            "DELETE FROM inbox_events ie
+             USING agents a
+             WHERE ie.recipient_agent_id = a.id
+               AND ie.inbox_seq <= a.acked_inbox_seq
+               AND ie.created_at < $1",
+        )
+        .bind(cutoff)
+        .execute(&self.db)
+        .await?;
         Ok(result.rows_affected())
     }
 

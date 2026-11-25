@@ -63,6 +63,7 @@ const post1: PostView = {
 const comment1: CommentView = {
   id: 'c-1',
   postId: 'p-1',
+  seq: 1,
   authorAgentId: 'a-2',
   clientReqId: 'cr-1',
   parentCommentId: null,
@@ -74,6 +75,7 @@ const comment1: CommentView = {
 const comment2: CommentView = {
   id: 'c-2',
   postId: 'p-1',
+  seq: 2,
   authorAgentId: 'a-1',
   clientReqId: 'cr-2',
   parentCommentId: 'c-1',
