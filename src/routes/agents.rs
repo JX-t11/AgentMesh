@@ -21,7 +21,8 @@ use super::{decode_keyset_cursor, encode_keyset_cursor, literal_search_pattern};
 const PROFILE_SELECT: &str =
     "SELECT a.id, a.slug, a.display_name, a.framework, a.description, a.capabilities,
             a.owner_user_id, u.username AS owner_username,
-            (a.revoked_at IS NOT NULL) AS is_revoked, a.created_at
+            (a.revoked_at IS NOT NULL) AS is_revoked,
+                (a.banned_at IS NOT NULL) AS is_banned, a.created_at
      FROM agents a LEFT JOIN users u ON u.id = a.owner_user_id";
 
 #[derive(Deserialize)]
@@ -91,6 +92,7 @@ pub struct AgentView {
     pub owner_user_id: Option<Uuid>,
     pub owner_username: Option<String>,
     pub is_revoked: bool,
+    pub is_banned: bool,
     pub created_at: DateTime<Utc>,
 }
 
@@ -133,11 +135,12 @@ pub async fn claim_my_agent(
              SET owner_user_id = $2
              WHERE id = $1 AND (owner_user_id IS NULL OR owner_user_id = $2)
              RETURNING id, slug, display_name, framework, description, capabilities,
-                       owner_user_id, revoked_at, created_at
+                       owner_user_id, revoked_at, banned_at, created_at
          )
          SELECT up.id, up.slug, up.display_name, up.framework, up.description, up.capabilities,
                 up.owner_user_id, u.username AS owner_username,
-                (up.revoked_at IS NOT NULL) AS is_revoked, up.created_at
+                (up.revoked_at IS NOT NULL) AS is_revoked,
+                (up.banned_at IS NOT NULL) AS is_banned, up.created_at
          FROM updated up
          LEFT JOIN users u ON u.id = up.owner_user_id",
     )
@@ -170,7 +173,8 @@ pub async fn list_my_agents(
     let agents = sqlx::query_as::<_, AgentView>(
         "SELECT a.id, a.slug, a.display_name, a.framework, a.description, a.capabilities,
                 a.owner_user_id, u.username AS owner_username,
-                (a.revoked_at IS NOT NULL) AS is_revoked, a.created_at
+                (a.revoked_at IS NOT NULL) AS is_revoked,
+                (a.banned_at IS NOT NULL) AS is_banned, a.created_at
          FROM agents a
          LEFT JOIN users u ON u.id = a.owner_user_id
          WHERE a.owner_user_id = $1
@@ -255,7 +259,8 @@ pub async fn list_agents(
     let agents = sqlx::query_as::<_, AgentView>(
         "SELECT a.id, a.slug, a.display_name, a.framework, a.description, a.capabilities,
                 a.owner_user_id, u.username AS owner_username,
-                (a.revoked_at IS NOT NULL) AS is_revoked, a.created_at
+                (a.revoked_at IS NOT NULL) AS is_revoked,
+                (a.banned_at IS NOT NULL) AS is_banned, a.created_at
          FROM agents a
          LEFT JOIN users u ON u.id = a.owner_user_id
          ORDER BY a.created_at ASC, a.id ASC",
@@ -276,7 +281,7 @@ pub async fn search_agents(
         .map(decode_keyset_cursor)
         .transpose()?;
     let mut statement = QueryBuilder::<Postgres>::new(PROFILE_SELECT);
-    statement.push(" WHERE a.revoked_at IS NULL");
+    statement.push(" WHERE a.revoked_at IS NULL AND a.banned_at IS NULL");
     if let Some(text) = query.q {
         let pattern = literal_search_pattern(text.as_str());
         statement
@@ -366,7 +371,8 @@ pub async fn get_me(
     let agent = sqlx::query_as::<_, AgentView>(
         "SELECT a.id, a.slug, a.display_name, a.framework, a.description, a.capabilities,
                 a.owner_user_id, u.username AS owner_username,
-                (a.revoked_at IS NOT NULL) AS is_revoked, a.created_at
+                (a.revoked_at IS NOT NULL) AS is_revoked,
+                (a.banned_at IS NOT NULL) AS is_banned, a.created_at
          FROM agents a
          LEFT JOIN users u ON u.id = a.owner_user_id
          WHERE a.id = $1",
@@ -392,11 +398,12 @@ async fn create_agent_record(
              INSERT INTO agents (id, slug, display_name, framework, description, capabilities, owner_user_id, token_sha256)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
              RETURNING id, slug, display_name, framework, description, capabilities,
-                       owner_user_id, revoked_at, created_at
+                       owner_user_id, revoked_at, banned_at, created_at
          )
          SELECT ins.id, ins.slug, ins.display_name, ins.framework, ins.description, ins.capabilities,
                 ins.owner_user_id, u.username AS owner_username,
-                (ins.revoked_at IS NOT NULL) AS is_revoked, ins.created_at
+                (ins.revoked_at IS NOT NULL) AS is_revoked,
+                (ins.banned_at IS NOT NULL) AS is_banned, ins.created_at
          FROM inserted ins
          LEFT JOIN users u ON u.id = ins.owner_user_id",
     )
@@ -445,11 +452,12 @@ async fn update_agent_profile_internal(
                  capabilities = COALESCE($4, capabilities)
              WHERE id = $1
              RETURNING id, slug, display_name, framework, description, capabilities,
-                       owner_user_id, revoked_at, created_at
+                       owner_user_id, revoked_at, banned_at, created_at
          )
          SELECT up.id, up.slug, up.display_name, up.framework, up.description, up.capabilities,
                 up.owner_user_id, u.username AS owner_username,
-                (up.revoked_at IS NOT NULL) AS is_revoked, up.created_at
+                (up.revoked_at IS NOT NULL) AS is_revoked,
+                (up.banned_at IS NOT NULL) AS is_banned, up.created_at
          FROM updated up
          LEFT JOIN users u ON u.id = up.owner_user_id",
     )
@@ -471,31 +479,50 @@ async fn update_agent_profile_internal(
     Ok(Json(AgentEnvelope { agent }))
 }
 
+type AgentLockStatus = (Option<DateTime<Utc>>, Option<DateTime<Utc>>);
+
 async fn rotate_agent_token_internal(
     state: &AppState,
     agent_id: Uuid,
 ) -> Result<Json<IssuedAgentResponse>, AppError> {
-    let (token, token_hash) = generate_agent_token();
+    let mut tx = state.db.begin().await?;
+    let status: Option<AgentLockStatus> =
+        sqlx::query_as("SELECT revoked_at, banned_at FROM agents WHERE id = $1 FOR UPDATE")
+            .bind(agent_id)
+            .fetch_optional(&mut *tx)
+            .await?;
 
+    let Some((revoked_at, banned_at)) = status else {
+        return Err(AppError::NotFound("agent not found".into()));
+    };
+    if revoked_at.is_some() {
+        return Err(AppError::Conflict("agent is revoked".into()));
+    }
+    if banned_at.is_some() {
+        return Err(AppError::Conflict("agent is banned".into()));
+    }
+
+    let (token, token_hash) = generate_agent_token();
     let agent = sqlx::query_as::<_, AgentView>(
         "WITH updated AS (
              UPDATE agents
-             SET token_sha256 = $2, revoked_at = NULL
+             SET token_sha256 = $2
              WHERE id = $1
              RETURNING id, slug, display_name, framework, description, capabilities,
-                       owner_user_id, revoked_at, created_at
+                       owner_user_id, revoked_at, banned_at, created_at
          )
          SELECT up.id, up.slug, up.display_name, up.framework, up.description, up.capabilities,
                 up.owner_user_id, u.username AS owner_username,
-                (up.revoked_at IS NOT NULL) AS is_revoked, up.created_at
+                (up.revoked_at IS NOT NULL) AS is_revoked,
+                (up.banned_at IS NOT NULL) AS is_banned, up.created_at
          FROM updated up
          LEFT JOIN users u ON u.id = up.owner_user_id",
     )
     .bind(agent_id)
     .bind(token_hash.as_slice())
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("agent not found".into()))?;
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
 
     state.auth_cache.upsert(
         token_hash,
@@ -521,11 +548,12 @@ async fn revoke_agent_internal(
              SET token_sha256 = NULL, revoked_at = COALESCE(revoked_at, NOW())
              WHERE id = $1
              RETURNING id, slug, display_name, framework, description, capabilities,
-                       owner_user_id, revoked_at, created_at
+                       owner_user_id, revoked_at, banned_at, created_at
          )
          SELECT up.id, up.slug, up.display_name, up.framework, up.description, up.capabilities,
                 up.owner_user_id, u.username AS owner_username,
-                (up.revoked_at IS NOT NULL) AS is_revoked, up.created_at
+                (up.revoked_at IS NOT NULL) AS is_revoked,
+                (up.banned_at IS NOT NULL) AS is_banned, up.created_at
          FROM updated up
          LEFT JOIN users u ON u.id = up.owner_user_id",
     )

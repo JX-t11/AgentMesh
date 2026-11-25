@@ -60,6 +60,7 @@ pub async fn register_user(
     let user_id = Uuid::new_v4();
     let (salt, password_hash) = hash_password(req.password.as_str());
     let (token, token_hash) = generate_user_token();
+    let expires_at = Utc::now() + state.session_ttl;
 
     let mut tx = state.db.begin().await?;
     let user = sqlx::query_as::<_, UserView>(
@@ -76,11 +77,14 @@ pub async fn register_user(
     .await
     .map_err(map_unique_username_conflict)?;
 
-    sqlx::query("INSERT INTO user_sessions (token_sha256, user_id) VALUES ($1, $2)")
-        .bind(token_hash.as_slice())
-        .bind(user.id)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "INSERT INTO user_sessions (token_sha256, user_id, expires_at) VALUES ($1, $2, $3)",
+    )
+    .bind(token_hash.as_slice())
+    .bind(user.id)
+    .bind(expires_at)
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
 
     state.auth_cache.upsert_user_session(
@@ -89,6 +93,7 @@ pub async fn register_user(
             id: user.id,
             username: user.username.clone(),
             display_name: user.display_name.clone(),
+            expires_at,
         },
     );
 
@@ -102,28 +107,52 @@ pub async fn login_user(
     State(state): State<AppState>,
     AppJson(req): AppJson<LoginUserRequest>,
 ) -> Result<Json<IssuedUserSessionResponse>, AppError> {
+    let username = req.username.as_str();
+    if state.login_rate_limiter.is_blocked(
+        username,
+        state.login_max_attempts,
+        state.login_rate_window,
+    ) {
+        return Err(AppError::RateLimited(
+            "too many failed login attempts; try again later".into(),
+        ));
+    }
+
     let row = sqlx::query_as::<_, UserAuthRow>(
         "SELECT id, username, display_name, password_salt, password_hash, created_at
          FROM users
          WHERE username = $1",
     )
-    .bind(req.username.as_str())
+    .bind(username)
     .fetch_optional(&state.db)
     .await?
-    .ok_or_else(|| AppError::Unauthorized("invalid username or password".into()))?;
+    .ok_or_else(|| {
+        state
+            .login_rate_limiter
+            .record_failure(username, state.login_rate_window);
+        AppError::Unauthorized("invalid username or password".into())
+    })?;
 
     if !verify_password(&req.password, &row.password_salt, &row.password_hash) {
+        state
+            .login_rate_limiter
+            .record_failure(username, state.login_rate_window);
         return Err(AppError::Unauthorized(
             "invalid username or password".into(),
         ));
     }
+    state.login_rate_limiter.clear(username);
 
     let (token, token_hash) = generate_user_token();
-    sqlx::query("INSERT INTO user_sessions (token_sha256, user_id) VALUES ($1, $2)")
-        .bind(token_hash.as_slice())
-        .bind(row.id)
-        .execute(&state.db)
-        .await?;
+    let expires_at = Utc::now() + state.session_ttl;
+    sqlx::query(
+        "INSERT INTO user_sessions (token_sha256, user_id, expires_at) VALUES ($1, $2, $3)",
+    )
+    .bind(token_hash.as_slice())
+    .bind(row.id)
+    .bind(expires_at)
+    .execute(&state.db)
+    .await?;
 
     let user = UserView {
         id: row.id,
@@ -138,6 +167,7 @@ pub async fn login_user(
             id: user.id,
             username: user.username.clone(),
             display_name: user.display_name.clone(),
+            expires_at,
         },
     );
 

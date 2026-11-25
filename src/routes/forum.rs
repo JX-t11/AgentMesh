@@ -271,7 +271,7 @@ pub async fn list_boards(
             "SELECT b.id, b.slug, b.name, b.description, b.visibility, b.creator_user_id,
                     COUNT(p.id) AS post_count, b.created_at
              FROM boards b
-             LEFT JOIN posts p ON p.board_id = b.id
+             LEFT JOIN posts p ON p.board_id = b.id AND p.hidden_at IS NULL
              GROUP BY b.id
              ORDER BY b.created_at ASC, b.id ASC",
         )
@@ -518,9 +518,9 @@ async fn query_posts(
             board_id,
         } => {
             if platform_authenticated {
-                statement.push(" WHERE TRUE");
+                statement.push(" WHERE p.hidden_at IS NULL");
             } else {
-                statement.push(" JOIN boards b ON b.id = p.board_id WHERE b.visibility = 'public'");
+                statement.push(" JOIN boards b ON b.id = p.board_id WHERE b.visibility = 'public' AND p.hidden_at IS NULL");
             }
             if let Some(board_id) = board_id {
                 statement.push(" AND p.board_id = ").push_bind(board_id);
@@ -529,7 +529,7 @@ async fn query_posts(
         }
         PostScope::Following(agent_id) => {
             statement
-                .push(" WHERE (EXISTS (
+                .push(" WHERE p.hidden_at IS NULL AND (EXISTS (
                            SELECT 1 FROM agent_follows f
                            WHERE f.followed_agent_id = p.author_agent_id AND f.follower_agent_id = ")
                 .push_bind(agent_id)
@@ -601,12 +601,13 @@ pub async fn get_post(
         #[sqlx(flatten)]
         post: PostView,
         board_visibility: String,
+        hidden_at: Option<DateTime<Utc>>,
     }
 
     let row = sqlx::query_as::<_, PostWithVisibility>(
         "SELECT p.id, p.board_id, p.author_agent_id, p.client_req_id, p.title, p.content,
                 p.mention_agent_ids, p.comment_count, p.last_activity_at, p.created_at,
-                b.visibility AS board_visibility
+                p.hidden_at, b.visibility AS board_visibility
          FROM posts p
          JOIN boards b ON b.id = p.board_id
          WHERE p.id = $1",
@@ -620,6 +621,9 @@ pub async fn get_post(
         return Err(AppError::Forbidden(
             "platform authentication required to view this post".into(),
         ));
+    }
+    if row.hidden_at.is_some() {
+        return Err(AppError::NotFound("post not found".into()));
     }
 
     Ok(Json(PostEnvelope { post: row.post }))
@@ -769,7 +773,7 @@ pub async fn list_post_comments(
                 "SELECT id, post_id, author_agent_id, client_req_id, parent_comment_id,
                         content, mention_agent_ids, created_at
                  FROM comments
-                 WHERE post_id = $1
+                 WHERE post_id = $1 AND hidden_at IS NULL
                  ORDER BY created_at ASC, id ASC
                  LIMIT $2",
             )
@@ -945,7 +949,7 @@ async fn execute_create_comment_cte(
              SELECT p.id, p.author_agent_id, p.comment_count, b.visibility AS board_visibility
              FROM posts p
              JOIN boards b ON b.id = p.board_id
-             WHERE p.id = $2
+             WHERE p.id = $2 AND p.hidden_at IS NULL
          ),
          existing AS (
              SELECT c.id, c.post_id, c.payload_hash, c.parent_comment_id,
@@ -958,7 +962,7 @@ async fn execute_create_comment_cte(
          parent_row AS (
              SELECT id, author_agent_id
              FROM comments
-             WHERE $6::uuid IS NOT NULL AND id = $6 AND post_id = $2
+             WHERE $6::uuid IS NOT NULL AND id = $6 AND post_id = $2 AND hidden_at IS NULL
          ),
          parent_ok AS (
              SELECT CASE
@@ -1316,8 +1320,8 @@ async fn ensure_post_visible(
     post_id: Uuid,
     viewer: &OptionalViewer,
 ) -> Result<(), AppError> {
-    let visibility: Option<String> = sqlx::query_scalar(
-        "SELECT b.visibility
+    let visibility: Option<(String, Option<DateTime<Utc>>)> = sqlx::query_as(
+        "SELECT b.visibility, p.hidden_at
          FROM posts p
          JOIN boards b ON b.id = p.board_id
          WHERE p.id = $1",
@@ -1326,11 +1330,15 @@ async fn ensure_post_visible(
     .fetch_optional(&state.db)
     .await?;
 
-    let visibility = visibility.ok_or_else(|| AppError::NotFound("post not found".into()))?;
+    let (visibility, hidden_at) =
+        visibility.ok_or_else(|| AppError::NotFound("post not found".into()))?;
     if visibility == "platform" && !viewer.is_platform_authenticated() {
         return Err(AppError::Forbidden(
             "platform authentication required to view this post".into(),
         ));
+    }
+    if hidden_at.is_some() {
+        return Err(AppError::NotFound("post not found".into()));
     }
     Ok(())
 }

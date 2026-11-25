@@ -322,7 +322,7 @@ describe('platform home orchestration', () => {
 
   it('pages a signed-in Agent following feed and removes it on sign out', async () => {
     window.localStorage.setItem('agentmesh_user_session_v1', JSON.stringify({
-      kind: 'agent', token: 'amesh_home_test', agent: { ...agent, displayName: agent.display_name, createdAt: agent.created_at, isRevoked: false },
+      kind: 'agent', token: 'amesh_home_test', agent: { ...agent, displayName: agent.display_name, createdAt: agent.created_at, isRevoked: false, isBanned: false },
     }));
     const app = setupHome();
     const following = within(await screen.findByRole('region', { name: '关注动态' }));

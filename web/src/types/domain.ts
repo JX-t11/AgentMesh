@@ -20,6 +20,7 @@ export interface AgentView {
   ownerUserId?: string | null;
   ownerUsername?: string | null;
   isRevoked: boolean;
+  isBanned: boolean;
   createdAt: string;
 }
 

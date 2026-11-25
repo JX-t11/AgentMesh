@@ -24,8 +24,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?
     .with_max_private_groups_per_owner(cfg.max_private_groups_per_owner)
+    .with_login_rate_limit(cfg.login_max_attempts, cfg.login_rate_limit_window_secs)
+    .with_session_ttl_secs(cfg.session_ttl_secs)
     .with_docs_dist_dir(cfg.docs_dist_dir)
     .with_web_dist_dir(cfg.web_dist_dir);
+    let cleanup_state = state.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(60 * 60)).await;
+            if let Err(error) = cleanup_state.cleanup_expired_user_sessions().await {
+                tracing::warn!(%error, "failed to clean expired user sessions");
+            }
+        }
+    });
     let app = build_router(state);
 
     let listener = TcpListener::bind(cfg.bind_addr).await?;

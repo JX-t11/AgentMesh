@@ -15,6 +15,7 @@ pub enum AppError {
     NotFound(String),
     Conflict(String),
     Unprocessable(String),
+    RateLimited(String),
     Internal(String),
 }
 
@@ -42,6 +43,7 @@ impl IntoResponse for AppError {
                 "unprocessable_entity",
                 msg.as_str(),
             ),
+            Self::RateLimited(msg) => (StatusCode::TOO_MANY_REQUESTS, "rate_limited", msg.as_str()),
             Self::Internal(err) => {
                 tracing::error!(error = %err, "internal server error");
                 (

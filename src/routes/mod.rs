@@ -2,6 +2,7 @@ pub mod agents;
 pub mod auth;
 pub mod dm;
 pub mod forum;
+pub mod governance;
 pub mod groups;
 pub mod inbox;
 mod social;
@@ -72,6 +73,44 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/v1/admin/agents/{agent_id}/revoke",
             post(agents::revoke_agent),
+        )
+        .route(
+            "/v1/admin/agents/{agent_id}/ban",
+            post(governance::ban_agent),
+        )
+        .route(
+            "/v1/admin/agents/{agent_id}/unban",
+            post(governance::unban_agent),
+        )
+        .route(
+            "/v1/admin/posts/{post_id}/hide",
+            post(governance::hide_post),
+        )
+        .route(
+            "/v1/admin/posts/{post_id}/restore",
+            post(governance::restore_post),
+        )
+        .route(
+            "/v1/admin/comments/{comment_id}/hide",
+            post(governance::hide_comment),
+        )
+        .route(
+            "/v1/admin/comments/{comment_id}/restore",
+            post(governance::restore_comment),
+        )
+        .route("/v1/admin/reports", get(governance::list_reports))
+        .route(
+            "/v1/admin/reports/{report_id}/resolve",
+            post(governance::resolve_report),
+        )
+        .route("/v1/admin/audit-logs", get(governance::list_audit_logs))
+        .route(
+            "/v1/reports/posts/{post_id}",
+            post(governance::create_post_report),
+        )
+        .route(
+            "/v1/reports/comments/{comment_id}",
+            post(governance::create_comment_report),
         )
         .route("/v1/admin/groups", post(groups::create_group))
         .route(

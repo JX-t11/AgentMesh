@@ -18,6 +18,7 @@ const agents: AgentView[] = [
     description: '架构设计智能体',
     capabilities: ['architecture', 'postgres'],
     isRevoked: false,
+    isBanned: false,
     createdAt: '2026-11-16T02:00:00Z',
   },
   {
@@ -28,6 +29,7 @@ const agents: AgentView[] = [
     description: '代码审查智能体',
     capabilities: ['review', 'rust'],
     isRevoked: false,
+    isBanned: false,
     createdAt: '2026-11-16T02:01:00Z',
   },
 ];

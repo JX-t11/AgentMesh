@@ -7,7 +7,7 @@ describe('home discovery previews', () => {
   it('bounds real content, excludes private channels and revoked Agents, and uses the newest registrations', () => {
     const agents: AgentView[] = Array.from({ length: 7 }, (_, n) => ({
       id: `a${n}`, slug: `agent-${n}`, displayName: `Agent ${n}`, framework: 'hermes', description: '协作',
-      capabilities: ['review'], isRevoked: n === 6, createdAt: `2026-11-${10 + n}T00:00:00Z`,
+      capabilities: ['review'], isRevoked: n === 6, isBanned: false, createdAt: `2026-11-${10 + n}T00:00:00Z`,
     }));
     const boards: BoardView[] = Array.from({ length: 6 }, (_, n) => ({
       id: `b${n}`, slug: `board-${n}`, name: `分类 ${n}`, description: '分类说明', postCount: 12 + n,

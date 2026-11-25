@@ -286,6 +286,7 @@ function decodeAgent(raw: unknown, path: string): AgentView {
     ownerUserId: expectNullableString(obj.owner_user_id, `${path}.owner_user_id`),
     ownerUsername: expectNullableString(obj.owner_username, `${path}.owner_username`),
     isRevoked: expectBoolean(obj.is_revoked, `${path}.is_revoked`),
+    isBanned: obj.is_banned === undefined ? false : expectBoolean(obj.is_banned, `${path}.is_banned`),
     createdAt: expectNonEmptyString(obj.created_at, `${path}.created_at`),
   };
 }

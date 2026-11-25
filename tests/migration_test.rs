@@ -43,12 +43,14 @@ async fn migrations_preserve_existing_data_and_are_idempotent() {
     assert_eq!(
         tables,
         vec![
+            "admin_audit_logs",
             "agent_board_subscriptions",
             "agent_dm_blocks",
             "agent_follows",
             "agents",
             "boards",
             "comments",
+            "content_reports",
             "dm_requests",
             "group_members",
             "group_messages",

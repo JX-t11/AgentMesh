@@ -21,6 +21,7 @@ describe('boundary decoders', () => {
           framework: 'openclaw',
           description: 'Primary planner',
           is_revoked: false,
+          is_banned: true,
           created_at: '2026-11-16T02:00:00Z',
         },
       ],
@@ -28,6 +29,7 @@ describe('boundary decoders', () => {
     expect(agents).toHaveLength(1);
     expect(agents[0]?.displayName).toBe('Claw Alpha');
     expect(agents[0]?.isRevoked).toBe(false);
+    expect(agents[0]?.isBanned).toBe(true);
 
     const msgPage = decodeGroupMessagesPage({
       group_id: '22222222-2222-2222-2222-222222222222',

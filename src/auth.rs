@@ -1,8 +1,12 @@
+use std::collections::VecDeque;
 use std::sync::Arc;
 
+use argon2::password_hash::{PasswordHash, SaltString};
+use argon2::{Argon2, PasswordHasher, PasswordVerifier};
 use axum::extract::FromRequestParts;
 use axum::http::header::AUTHORIZATION;
 use axum::http::request::Parts;
+use chrono::{DateTime, Duration, Utc};
 use dashmap::DashMap;
 use rand::rngs::OsRng;
 use rand::RngCore;
@@ -29,6 +33,7 @@ pub struct UserPrincipal {
     pub id: Uuid,
     pub username: String,
     pub display_name: String,
+    pub expires_at: DateTime<Utc>,
 }
 
 #[derive(Default)]
@@ -38,20 +43,23 @@ pub struct AuthCache {
     users_by_hash: DashMap<[u8; 32], Arc<UserPrincipal>>,
 }
 
+type LoadedUserSessionRow = (Vec<u8>, Uuid, String, String, DateTime<Utc>);
+
 impl AuthCache {
     pub async fn load_from_db(pool: &PgPool) -> Result<Self, sqlx::Error> {
         let agent_rows: Vec<(Uuid, String, String, String, Vec<u8>)> = sqlx::query_as(
             "SELECT id, slug, display_name, framework, token_sha256
              FROM agents
-             WHERE revoked_at IS NULL AND token_sha256 IS NOT NULL",
+             WHERE revoked_at IS NULL AND banned_at IS NULL AND token_sha256 IS NOT NULL",
         )
         .fetch_all(pool)
         .await?;
 
-        let user_rows: Vec<(Vec<u8>, Uuid, String, String)> = sqlx::query_as(
-            "SELECT s.token_sha256, u.id, u.username, u.display_name
+        let user_rows: Vec<LoadedUserSessionRow> = sqlx::query_as(
+            "SELECT s.token_sha256, u.id, u.username, u.display_name, s.expires_at
              FROM user_sessions s
-             JOIN users u ON u.id = s.user_id",
+             JOIN users u ON u.id = s.user_id
+             WHERE s.expires_at > NOW()",
         )
         .fetch_all(pool)
         .await?;
@@ -70,7 +78,7 @@ impl AuthCache {
                 );
             }
         }
-        for (hash_bytes, id, username, display_name) in user_rows {
+        for (hash_bytes, id, username, display_name, expires_at) in user_rows {
             if let Ok(hash) = <[u8; 32]>::try_from(hash_bytes.as_slice()) {
                 cache.upsert_user_session(
                     hash,
@@ -78,6 +86,7 @@ impl AuthCache {
                         id,
                         username,
                         display_name,
+                        expires_at,
                     },
                 );
             }
@@ -94,9 +103,10 @@ impl AuthCache {
 
     pub fn verify_user_token(&self, raw_token: &str) -> Option<([u8; 32], Arc<UserPrincipal>)> {
         let hash = hash_token(raw_token);
-        self.users_by_hash
-            .get(&hash)
-            .map(|entry| (hash, Arc::clone(entry.value())))
+        self.users_by_hash.get(&hash).and_then(|entry| {
+            let principal = entry.value();
+            (principal.expires_at > Utc::now()).then(|| (hash, Arc::clone(principal)))
+        })
     }
 
     pub fn upsert(&self, token_hash: [u8; 32], principal: AgentPrincipal) {
@@ -131,6 +141,38 @@ impl AuthCache {
     }
 }
 
+#[derive(Default)]
+pub struct LoginRateLimiter {
+    failures_by_username: DashMap<String, VecDeque<DateTime<Utc>>>,
+}
+
+impl LoginRateLimiter {
+    pub fn is_blocked(&self, username: &str, max_attempts: u32, window: Duration) -> bool {
+        let now = Utc::now();
+        let cutoff = now - window;
+        let Some(mut failures) = self.failures_by_username.get_mut(username) else {
+            return false;
+        };
+        failures.retain(|at| *at > cutoff);
+        failures.len() >= max_attempts as usize
+    }
+
+    pub fn record_failure(&self, username: &str, window: Duration) {
+        let now = Utc::now();
+        let cutoff = now - window;
+        let mut failures = self
+            .failures_by_username
+            .entry(username.to_owned())
+            .or_default();
+        failures.retain(|at| *at > cutoff);
+        failures.push_back(now);
+    }
+
+    pub fn clear(&self, username: &str) {
+        self.failures_by_username.remove(username);
+    }
+}
+
 pub fn generate_agent_token() -> (String, [u8; 32]) {
     generate_prefixed_token("amesh")
 }
@@ -151,19 +193,37 @@ pub fn hash_token(token: &str) -> [u8; 32] {
     Sha256::digest(token.as_bytes()).into()
 }
 
-pub fn hash_password(password: &str) -> ([u8; 32], [u8; 32]) {
-    let mut salt = [0u8; 32];
-    OsRng.fill_bytes(&mut salt);
-    let digest = derive_password_hash(password, &salt);
-    (salt, digest)
+pub fn hash_password(password: &str) -> (Vec<u8>, Vec<u8>) {
+    let salt = SaltString::generate(&mut OsRng);
+    let encoded = Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .expect("Argon2id parameters are valid")
+        .to_string();
+    (salt.as_str().as_bytes().to_vec(), encoded.into_bytes())
 }
 
 pub fn verify_password(password: &str, salt: &[u8], expected_hash: &[u8]) -> bool {
-    if expected_hash.len() != 32 {
-        return false;
+    // Argon2 的 PHC 字符串已包含 salt、算法参数和版本；迁移前的旧账号继续走原校验路径。
+    if expected_hash.starts_with(b"$argon2id$") {
+        let encoded = match std::str::from_utf8(expected_hash) {
+            Ok(encoded) => encoded,
+            Err(_) => return false,
+        };
+        let parsed = match PasswordHash::new(encoded) {
+            Ok(parsed) => parsed,
+            Err(_) => return false,
+        };
+        Argon2::default()
+            .verify_password(password.as_bytes(), &parsed)
+            .is_ok()
+    } else {
+        if salt.len() != 32 || expected_hash.len() != 32 {
+            return false;
+        }
+        let salt: [u8; 32] = salt.try_into().expect("checked length above");
+        let expected: [u8; 32] = expected_hash.try_into().expect("checked length above");
+        bool::from(derive_password_hash(password, &salt).ct_eq(&expected))
     }
-    let computed = derive_password_hash(password, salt);
-    bool::from(computed.as_slice().ct_eq(expected_hash))
 }
 
 fn derive_password_hash(password: &str, salt: &[u8]) -> [u8; 32] {

@@ -81,6 +81,7 @@ export function AgentBadge({
       <span className="agent-slug">@{agent.slug}</span>
       <span className={frameworkClassName(agent.framework)}>{agent.framework}</span>
       {agent.isRevoked && <span className="revoked-pill">已吊销</span>}
+      {agent.isBanned && <span className="revoked-pill">已封禁</span>}
     </>
   );
 

@@ -15,6 +15,7 @@ const agents: AgentView[] = [
     framework: 'openclaw',
     description: 'OpenClaw 协调节点',
     isRevoked: false,
+    isBanned: false,
     createdAt: '2026-11-16T02:00:00Z',
   },
   {
@@ -24,6 +25,7 @@ const agents: AgentView[] = [
     framework: 'hermes',
     description: 'Hermes 执行节点',
     isRevoked: true,
+    isBanned: false,
     createdAt: '2026-11-16T02:01:00Z',
   },
 ];

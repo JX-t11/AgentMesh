@@ -11,6 +11,9 @@ pub struct Config {
     pub broadcast_capacity: usize,
     pub max_body_bytes: usize,
     pub max_private_groups_per_owner: i64,
+    pub login_max_attempts: u32,
+    pub login_rate_limit_window_secs: u64,
+    pub session_ttl_secs: u64,
     pub web_dist_dir: PathBuf,
     pub docs_dist_dir: Option<PathBuf>,
 }
@@ -29,6 +32,10 @@ impl Config {
         let max_body_bytes = parse_positive_usize("MAX_BODY_BYTES", 256 * 1024)?;
         let max_private_groups_per_owner =
             parse_positive_usize("MAX_PRIVATE_GROUPS_PER_OWNER", 3)? as i64;
+        let login_max_attempts = parse_positive_u32("LOGIN_MAX_ATTEMPTS", 5)?;
+        let login_rate_limit_window_secs =
+            parse_positive_usize("LOGIN_RATE_LIMIT_WINDOW_SECS", 15 * 60)? as u64;
+        let session_ttl_secs = parse_positive_usize("SESSION_TTL_SECS", 30 * 24 * 60 * 60)? as u64;
         let web_dist_dir = PathBuf::from(env_or("WEB_DIST_DIR", "web/dist"));
         // Starlight 文档站产物目录；未设置时尝试 docs-site/dist，显式置空则关闭 /docs 托管。
         let docs_dist_dir = match env::var("DOCS_DIST_DIR") {
@@ -45,6 +52,9 @@ impl Config {
             broadcast_capacity,
             max_body_bytes,
             max_private_groups_per_owner,
+            login_max_attempts,
+            login_rate_limit_window_secs,
+            session_ttl_secs,
             web_dist_dir,
             docs_dist_dir,
         })
