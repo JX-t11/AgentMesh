@@ -131,25 +131,15 @@ curl -s -u "<token>:" "http://192.168.1.234:9000/api/issues/search?componentKeys
 
 性能参考:46 个源文件(含 Rust)约 13.5s 扫完,服务端异步处理约 1–2 分钟。
 
-### 当前 main 基线(2026-11-25,对应 `6c41418`)
+### 当前 main 基线(2026-11-25,对应 `d57d46b`)
 
 | 指标 | 值 |
 |---|---|
-| 开放 issue | 4 = 0 BUG + 4 Code Smell + 0 Vulnerability |
-| 严重度 | CRITICAL 4 |
-| 评级 | 可靠性 A / 安全 A / 可维护性 A,重复率 1.2%,安全热点 0 |
+| 开放 issue | 0 = 0 BUG + 0 Code Smell + 0 Vulnerability |
+| 评级 | 可靠性 A / 安全 A / 可维护性 A,重复率 1.5%,安全热点 0 |
 | 质量门 | ERROR:新代码覆盖率 0.0%(门槛 80%);新增违规与重复率条件通过 |
 
-Issue 明细:
-
-| 严重度 | 类型 | 规则 | 位置 | 说明 |
-|---|---|---|---|---|
-| CRITICAL | Code Smell | rust:S3776 | `src/routes/mod.rs:38` | 认知复杂度 26 > 15 |
-| CRITICAL | Code Smell | rust:S3776 | `src/routes/groups.rs:1043` | 认知复杂度 16 > 15 |
-| CRITICAL | Code Smell | rust:S3776 | `src/routes/ws.rs:301` | 认知复杂度 27 > 15 |
-| CRITICAL | Code Smell | rust:S3776 | `tests/high_concurrency_test.rs:24` | 认知复杂度 72 > 15 |
-
-首扫的 15 项 TS/Docker/`secrets:S6698` 命中已由 `1dbddcb` 清理。当前 4 项都是 Rust 认知复杂度;质量门唯一失败项是覆盖率。仓库尚未生成并上传 LCOV,这里不伪造覆盖率报告;补齐 `web` 覆盖率后再复扫,才能判断新代码 80% 门槛是否真实可达。
+历史首扫的 TS/Docker/`secrets:S6698` 命中已由 `1dbddcb` 清理;4 个 Rust 认知复杂度 hotspots 已由 `d57d46b` 拆分消除。质量门唯一失败项是覆盖率。仓库尚未生成并上传 LCOV,这里不伪造覆盖率报告;补齐 `web` 覆盖率后再复扫,才能判断新代码 80% 门槛是否真实可达。
 
 ### 工具分工与频率
 
@@ -251,3 +241,6 @@ E2E 不放进 CI:它需要模型凭据、Docker 网络和真实 Agent 运行时,
 | 4-Agent E2E | `node scripts/e2e/verify-e2e.mjs` | 退出码 0,runId `e2e-23068485`;OpenClaw 暴露 25 个契约工具,IM/forum/restart/observer/privacy/social discovery 全过 |
 | 4-Agent E2E 凭证改造复验 | `node scripts/e2e/verify-e2e.mjs` | 退出码 0,runId `e2e-d94ca7fc`;E2E PG 密码按次生成后全场景仍通过 |
 | SonarQube 复扫 | `SONAR_TOKEN=… bash scripts/sonar-scan.sh` | 退出码 0,对应 `6c41418`;新增违规 0,总开放 issue 4(全部历史 Rust 复杂度),漏洞 0;质量门仅剩新代码覆盖率 0.0% |
+| Rust 复杂度拆分 | `cargo fmt --all --check` + clippy + `cargo test` | 退出码均 0;`high_concurrency_test` 拆分后仍 1/1 通过 |
+| SonarQube 复杂度复扫 | `SONAR_TOKEN=… bash scripts/sonar-scan.sh` | 退出码 0,对应 `d57d46b`;开放 issue 0,Code Smell 0,新增违规 0 |
+| Semgrep 复杂度改造复扫 | `bash scripts/semgrep-scan.sh` | 退出码 0,1034 个跟踪文件,295 条规则,0 命中 |
