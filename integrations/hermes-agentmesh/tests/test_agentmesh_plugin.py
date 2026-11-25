@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -29,8 +31,9 @@ def _load_plugin_package():
 
 
 PKG = _load_plugin_package()
-from hermes_agentmesh_pkg.client import AgentMeshClient, AgentMeshConfig  # noqa: E402
+from hermes_agentmesh_pkg.client import AgentMeshClient, AgentMeshConfig, AgentMeshApiError  # noqa: E402
 from hermes_agentmesh_pkg.daemon import FileCursorStore, HermesMeshDaemon  # noqa: E402
+from hermes_agentmesh_pkg import tools as plugin_tools  # noqa: E402
 
 
 class _FakeCtx:
@@ -438,6 +441,145 @@ class HermesPluginTest(unittest.TestCase):
         finally:
             srv.shutdown()
             srv.server_close()
+
+    def test_tool_helpers_serialize_success_and_errors(self) -> None:
+        class FakeClient:
+            def whoami(self):
+                return {"agent": {"id": "agent-id", "slug": "hermes-gamma"}}
+
+            def update_profile(self, **kwargs):
+                assert kwargs == {
+                    "display_name": "Gamma",
+                    "description": None,
+                    "capabilities": ["python"],
+                }
+                return {"agent": {"display_name": "Gamma"}}
+
+            def find_agents(self, **kwargs):
+                assert kwargs["q"] == "alpha"
+                return {"agents": [{"id": "peer-id"}]}
+
+            def read_feed(self, **kwargs):
+                raise AgentMeshApiError(503, "unavailable", "backend is unavailable")
+
+            def follow_agent(self, target_agent, following):
+                assert target_agent == "alpha"
+                assert following == "not-a-bool"
+                raise ValueError("following must be a boolean")
+
+            def list_agents(self):
+                raise AgentMeshApiError(503, "unavailable", "backend is unavailable")
+
+        original_client = plugin_tools._get_client
+        plugin_tools._get_client = lambda: FakeClient()
+        try:
+            with mock.patch.dict(os.environ, {"AGENTMESH_TOKEN": "amesh_token"}):
+                self.assertTrue(plugin_tools.check_agentmesh_available())
+                self.assertEqual(json.loads(plugin_tools.handle_whoami({}, **{}))["agent"]["slug"], "hermes-gamma")
+                profile = json.loads(
+                    plugin_tools.handle_update_profile(
+                        {"display_name": "Gamma", "capabilities": ["python"]},
+                        **{},
+                    )
+                )
+                self.assertEqual(profile["agent"]["display_name"], "Gamma")
+                found = json.loads(plugin_tools.handle_find_agents({"q": "alpha"}, **{}))
+                self.assertEqual(found["agents"][0]["id"], "peer-id")
+
+                invalid = json.loads(plugin_tools.handle_follow_agent({"target_agent": "alpha", "following": "not-a-bool"}, **{}))
+                self.assertEqual(invalid["error"]["code"], "invalid_input")
+                unavailable = json.loads(plugin_tools.handle_feed({}, **{}))
+                self.assertEqual(unavailable["error"]["code"], "unavailable")
+                self.assertEqual(unavailable["error"]["status"], 503)
+        finally:
+            plugin_tools._get_client = original_client
+
+    def test_daemon_builds_prompt_for_dm_group_and_post_events(self) -> None:
+        client = AgentMeshClient(AgentMeshConfig(base_url="http://127.0.0.1:1", token="amesh_tok"))
+        client.read_group_messages = lambda **_kwargs: {
+            "group_id": "group-id",
+            "messages": [
+                {
+                    "id": "message-id",
+                    "group_id": "group-id",
+                    "seq": 7,
+                    "sender_agent_id": "peer-id",
+                    "client_msg_id": "m1",
+                    "content": "review required",
+                    "reply_to_msg_id": None,
+                    "mention_agent_ids": ["self-id"],
+                    "created_at": "2026-11-16T00:00:00Z",
+                }
+            ],
+            "has_more": False,
+        }
+        client.read_forum_post = lambda **_kwargs: {
+            "post": {"id": "post-id", "title": "Protocol RFC", "content": "Please review"},
+            "comments": [
+                {
+                    "id": "comment-id",
+                    "post_id": "post-id",
+                    "seq": 1,
+                    "author_agent_id": "peer-id",
+                    "client_req_id": "c1",
+                    "parent_comment_id": None,
+                    "content": "Approved",
+                    "mention_agent_ids": [],
+                    "created_at": "2026-11-16T00:00:00Z",
+                }
+            ],
+            "next_cursor": None,
+            "has_more": False,
+        }
+        daemon = HermesMeshDaemon(client, FileCursorStore(Path("/tmp/unused-cursor.json")), lambda *_: asyncio.sleep(0), log=lambda _: None)
+
+        group_prompt = daemon._build_wake_prompt({
+            "kind": "group_mention",
+            "inbox_seq": 1,
+            "actor_agent_id": "peer-id",
+            "source_id": "message-id",
+            "group_id": "group-id",
+            "post_id": None,
+            "summary": "please review",
+        })
+        self.assertIn("target_message_id=message-id", group_prompt)
+        self.assertIn("target_message_seq=7", group_prompt)
+
+        dm_prompt = daemon._build_wake_prompt({
+            "kind": "dm_accepted",
+            "inbox_seq": 2,
+            "actor_agent_id": "peer-id",
+            "source_id": "request-id",
+            "group_id": "dm-group-id",
+            "post_id": None,
+            "summary": "accepted",
+        })
+        self.assertIn("dm_group_id=dm-group-id", dm_prompt)
+        self.assertIn("agentmesh_send_group_message", dm_prompt)
+
+        post_prompt = daemon._build_wake_prompt({
+            "kind": "post_mention",
+            "inbox_seq": 3,
+            "actor_agent_id": "peer-id",
+            "source_id": "post-id",
+            "group_id": None,
+            "post_id": "post-id",
+            "summary": "new post",
+        })
+        self.assertIn("title=\"Protocol RFC\"", post_prompt)
+        self.assertIn("post_content=\"Please review\"", post_prompt)
+
+        comment_prompt = daemon._build_wake_prompt({
+            "kind": "comment_mention",
+            "inbox_seq": 4,
+            "actor_agent_id": "peer-id",
+            "source_id": "comment-id",
+            "group_id": None,
+            "post_id": "post-id",
+            "summary": "new comment",
+        })
+        self.assertIn("target_comment_id=comment-id", comment_prompt)
+        self.assertIn("target_comment_content=\"Approved\"", comment_prompt)
 
     def test_daemon_catches_up_filters_self_and_persists_cursor(self) -> None:
         self_id = "11111111-1111-4111-8111-111111111111"

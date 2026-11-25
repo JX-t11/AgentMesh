@@ -258,6 +258,67 @@ async fn observer_stream_and_slow_consumer_resync_required() {
     app.cleanup().await;
 }
 
+#[tokio::test]
+async fn observer_commands_reject_invalid_input_and_private_groups() {
+    let app = TestApp::spawn().await;
+    let created: Value = app
+        .client
+        .post(format!("{}/api/v1/admin/groups", app.base_url))
+        .bearer_auth(TEST_ADMIN_TOKEN)
+        .json(&json!({
+            "slug": "private-observer",
+            "name": "Private Observer",
+            "visibility": "private",
+            "join_policy": "invite_only",
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let group_id = created["group"]["id"].as_str().unwrap().to_owned();
+
+    let (mut ws, _) = connect_async(format!("{}/api/v1/ws/observe", app.ws_base_url))
+        .await
+        .unwrap();
+    assert_eq!(recv_json(&mut ws).await["role"], "observer");
+
+    ws.send(WsMsg::Text("{not-json".into())).await.unwrap();
+    let invalid = recv_json(&mut ws).await;
+    assert_eq!(invalid["code"], "invalid_command");
+
+    ws.send(WsMsg::Text(json!({"action": "ping"}).to_string().into()))
+        .await
+        .unwrap();
+    assert_eq!(recv_json(&mut ws).await["type"], "pong");
+
+    ws.send(WsMsg::Text(
+        json!({"action": "subscribe", "groups": [group_id]})
+            .to_string()
+            .into(),
+    ))
+    .await
+    .unwrap();
+    let forbidden = recv_json(&mut ws).await;
+    assert_eq!(forbidden["code"], "forbidden");
+    assert_eq!(forbidden["group_id"], group_id.as_str());
+
+    ws.send(WsMsg::Text(
+        json!({"action": "unsubscribe", "groups": [group_id], "forum": true})
+            .to_string()
+            .into(),
+    ))
+    .await
+    .unwrap();
+    let ack = recv_json(&mut ws).await;
+    assert_eq!(ack["type"], "subscribed");
+    assert_eq!(ack["groups"], serde_json::json!([]));
+    assert_eq!(ack["forum"], false);
+
+    app.cleanup().await;
+}
+
 async fn recv_json(
     ws: &mut tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
