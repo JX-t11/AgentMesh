@@ -21,10 +21,10 @@ Usage:
   bash scripts/trivy-scan.sh image <local-image> [output-dir]
   bash scripts/trivy-scan.sh images [output-dir]
 
-deps scans Cargo.lock, web/package-lock.json and docs-site/package-lock.json,
-plus integrations/openclaw-agentmesh/package-lock.json when that ignored local
-plugin tree is present. images scans the locally built AgentMesh images that
-exist (server, OpenClaw agent, Hermes agent), skipping missing tags.
+deps scans Cargo.lock, web/package-lock.json, docs-site/package-lock.json and
+integrations/openclaw-agentmesh/package-lock.json. images scans the locally built
+AgentMesh images that exist (server, OpenClaw agent, Hermes agent), skipping
+missing tags.
 
 Vulnerability findings are reported without failing the scan. Operational
 errors fail. Each target produces report.json and sbom.cdx.json under

@@ -187,7 +187,7 @@ bash scripts/trivy-scan.sh images                # 扫描本机已存在的 4 �
 | `Cargo.lock` | 0 | — |
 | `web/package-lock.json` | 5 | 2 CRITICAL `tinypool` 1.1.1;3 MEDIUM `vitest`/`@vitest/mocker` 3.2.7 |
 | `docs-site/package-lock.json` | 0 | — |
-| `integrations/openclaw-agentmesh/package-lock.json` | 5 | 与 `web` 相同的 Vitest 传递依赖;该目录仍未跟踪 |
+| `integrations/openclaw-agentmesh/package-lock.json` | 5 | 与 `web` 相同的 Vitest 传递依赖 |
 
 `tinypool` 的修复版本是 2.1.1/2.1.2,`vitest` 侧修复在 4.1.11/5.0.3,因此需要升级到 Vitest 4/5 这一类主版本,不能靠补丁版本解决。升级前先跑现有 40 个前端测试和 OpenClaw 插件测试,单独评估。
 
@@ -207,17 +207,17 @@ bash scripts/trivy-scan.sh images                # 扫描本机已存在的 4 �
 `.github/dependabot.yml` 每周检查:
 
 - Cargo 根依赖(`/`);
-- `web/` 与 `docs-site/` 的 npm 依赖;
+- `web/`、`integrations/openclaw-agentmesh/` 与 `docs-site/` 的 npm 依赖;
 - GitHub Actions 引用。
 
-Cargo 和 `web` 的次版本/补丁更新合并为 `minor-and-patch` 组,`docs-site` 和 Actions 单独限额。GitHub 仓库的 `Settings → Code security` 还需分别开启 Dependabot alerts 和 Dependabot security updates;配置文件只负责版本更新 PR。`integrations/openclaw-agentmesh` 暂不纳入:该目录仍被 `.gitignore` 忽略,GitHub 看不到锁文件。先在仓库里跟踪 `integrations/`,Dependabot 才能覆盖插件依赖。
+Cargo、`web` 和 `integrations/openclaw-agentmesh` 的次版本/补丁更新合并为 `minor-and-patch` 组,`docs-site` 和 Actions 单独限额。GitHub 仓库的 `Settings → Code security` 还需分别开启 Dependabot alerts 和 Dependabot security updates;配置文件只负责版本更新 PR。
 
 ## 六、CI
 
 `.github/workflows/ci.yml` 在 PR 和 `main` 推送时运行:
 
-- `test`:PostgreSQL 16 service、Node 24、Rust;执行 `npm ci`、前端构建、ESLint 门禁、typed 审计、Vitest、文档站构建,再执行 `cargo fmt --all --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test --all-targets`;
-- `trivy`:扫描 `Cargo.lock`、`web/` 与 `docs-site/` 锁文件,上传报告和 SBOM artifact,保留 30 天。
+- `test`:PostgreSQL 16 service、Node 24、Rust;执行 `npm ci`、前端构建、ESLint 门禁、typed 审计、Vitest、文档站构建、双插件类型/单元测试与 E2E Compose 校验,再执行 `cargo fmt --all --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test --all-targets`;
+- `trivy`:扫描 `Cargo.lock`、`web/`、`integrations/openclaw-agentmesh/` 与 `docs-site/` 锁文件,上传报告和 SBOM artifact,保留 30 天。
 
 E2E 不放进 CI:它需要模型凭据、Docker 网络和真实 Agent 运行时,继续按 `scripts/e2e/verify-e2e.mjs` 本地执行。Semgrep 和 SonarQube 也保持本地/手动,原因分别是规则缓存与共享实例的干净 `main` 限制。Qualor 暂未接入:共享 Qualor 实例还没有 `agentmesh` 项目和令牌,需要时先按参考文档建项目,再补 `qualor.yml` 和扫描容器命令。
 

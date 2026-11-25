@@ -153,7 +153,7 @@ npm --prefix docs-site run build  # 产出 docs-site/dist
 
 ### 3.8 本地 Agent 插件联调
 
-本地的 `integrations/` 由 Git 忽略。已有插件源码时，可用 `npm --prefix web run package:connectors` 生成两个安装包，输出到 `.tmp/agentmesh-connectors/`，仅用于本地联调。
+插件源码已在仓库内。可用 `npm --prefix web run package:connectors` 生成两个安装包，输出到 `.tmp/agentmesh-connectors/`，仅用于本地联调。
 
 - **OpenClaw 原生插件**（`integrations/openclaw-agentmesh`）：
   - 清单 `openclaw.plugin.json` + 工具/守护进程模块 + Skill（`integrations/openclaw-agentmesh/skills/agentmesh/SKILL.md`）。
@@ -164,7 +164,7 @@ npm --prefix docs-site run build  # 产出 docs-site/dist
 
 ### 3.9 4-Agent 异构联调与 Docker Compose E2E 验收
 
-本地联调使用已有的 `docker-compose.e2e.yml` 和 `integrations/`。这两项均由 Git 忽略，新克隆需要另行准备。该 Compose 环境编排 PostgreSQL、服务端、引导容器与 **2 个 OpenClaw + 2 个 Hermes Agent**，支持确定性模型和真实模型两种模式。
+本地联调使用仓库内的 `docker-compose.e2e.yml` 和 `integrations/`，新克隆无需额外准备。该 Compose 环境编排 PostgreSQL、服务端、引导容器与 **2 个 OpenClaw + 2 个 Hermes Agent**，支持确定性模型和真实模型两种模式。
 
 E2E 脚本会先执行 `down -v` 清理对应 Compose 项目的容器和数据卷，结束后也会清理，除非指定 `--keep-up`。请在独立验收环境运行；可通过 `COMPOSE_PROJECT_NAME` 与 `AGENTMESH_E2E_PORT` 指定独立项目名和端口，避免影响已有社区演示环境。
 
@@ -243,7 +243,7 @@ CI 在 PR 和 `main` 推送时执行前端 lint/typed/test/build、文档站构�
 | [web/src/](web/src/) | React 页面、组件、HTTP 客户端与实时流 |
 | [web/src/styles/app.css](web/src/styles/app.css) | 自定义 CSS 与深浅主题 |
 | [docs-site/](docs-site/) | Astro/Starlight 文档站、指南源文件与构建脚本 |
-| `integrations/`、`docker-compose.e2e.yml` | 本地插件源码和联调配置 |
+| [integrations/](integrations/)、[docker-compose.e2e.yml](docker-compose.e2e.yml) | 双框架插件源码与 4-Agent 联调 Compose |
 | [tests/](tests/)、[scripts/e2e/](scripts/e2e/) | 后端集成测试与本地跨框架 E2E 验收脚本 |
 | [docker/](docker/) | 服务端、Agent 镜像与启动脚本 |
 | [docs/](docs/)、[openspec/](openspec/) | 接口、界面说明与功能规格 |

@@ -25,6 +25,18 @@ updates:
         update-types: [minor, patch]
 
   - package-ecosystem: npm
+    directory: /integrations/openclaw-agentmesh
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
     directory: /docs-site
     schedule:
       interval: weekly

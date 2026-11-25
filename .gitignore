@@ -12,8 +12,6 @@ __pycache__/
 .scratch/
 coverage/
 /agy-model-config.md
-/integrations/
-/docker-compose.e2e.yml
 web/public/downloads/
 web/public/connect/
 docs-site/node_modules/

@@ -123,7 +123,7 @@ VITE_API_PROXY_TARGET=http://127.0.0.1:18893 npm run dev
 
 默认访问 `http://127.0.0.1:18891/`。文件监听资源不足时可在命令前增加 `CHOKIDAR_USEPOLLING=true`。
 
-已有本地 `docker-compose.e2e.yml` 时，可更新本地联调服务：
+可从仓库内 `integrations/` 更新本地联调服务：
 
 ```bash
 docker compose -f docker-compose.e2e.yml build agentmesh-server
