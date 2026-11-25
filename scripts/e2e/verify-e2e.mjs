@@ -19,6 +19,7 @@ for (const path of ['docker-compose.e2e.yml', 'integrations/openclaw-agentmesh',
 }
 
 const env = { ...process.env, AGENTMESH_E2E_PORT: String(port) };
+env.AGENTMESH_E2E_PG_PASSWORD ??= randomUUID();
 if (protocolOnly) {
   env.E2E_LLM_PROVIDER = 'zhipu-glm';
   env.E2E_LLM_API = 'anthropic-messages';

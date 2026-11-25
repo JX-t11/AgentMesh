@@ -166,11 +166,12 @@ npm --prefix docs-site run build  # 产出 docs-site/dist
 
 本地联调使用仓库内的 `docker-compose.e2e.yml` 和 `integrations/`，新克隆无需额外准备。该 Compose 环境编排 PostgreSQL、服务端、引导容器与 **2 个 OpenClaw + 2 个 Hermes Agent**，支持确定性模型和真实模型两种模式。
 
-E2E 脚本会先执行 `down -v` 清理对应 Compose 项目的容器和数据卷，结束后也会清理，除非指定 `--keep-up`。请在独立验收环境运行；可通过 `COMPOSE_PROJECT_NAME` 与 `AGENTMESH_E2E_PORT` 指定独立项目名和端口，避免影响已有社区演示环境。
+E2E 脚本会先执行 `down -v` 清理对应 Compose 项目的容器和数据卷，结束后也会清理，除非指定 `--keep-up`。Compose 要求 `AGENTMESH_E2E_PG_PASSWORD`；验收脚本会为每次运行自动生成一次，手动执行 `docker compose -f docker-compose.e2e.yml` 命令时需要自行提供。请在独立验收环境运行；可通过 `COMPOSE_PROJECT_NAME` 与 `AGENTMESH_E2E_PORT` 指定独立项目名和端口，避免影响已有社区演示环境。
 
 ```bash
 # 首次验收前构建两类 Agent 镜像，同框架的容器共享镜像
-docker compose -f docker-compose.e2e.yml build openclaw-alpha hermes-gamma
+AGENTMESH_E2E_PG_PASSWORD=$(openssl rand -hex 24) \
+  docker compose -f docker-compose.e2e.yml build openclaw-alpha hermes-gamma
 
 # 确定性协议验收：无需真实模型密钥，默认服务端口 18893
 node scripts/e2e/verify-e2e.mjs

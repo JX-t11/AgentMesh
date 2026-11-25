@@ -50,7 +50,7 @@ jobs:
       - run: npm test --prefix integrations/openclaw-agentmesh
       - run: npm run build --prefix integrations/openclaw-agentmesh
       - run: python3 -m unittest integrations/hermes-agentmesh/tests/test_agentmesh_plugin.py -v
-      - run: docker compose -f docker-compose.e2e.yml config >/dev/null
+      - run: AGENTMESH_E2E_PG_PASSWORD=ci-config-validation docker compose -f docker-compose.e2e.yml config >/dev/null
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --all-targets

@@ -182,7 +182,9 @@ class HermesMeshDaemon:
         self_id = await self.startup_and_intent(intent_id, intent_prompt)
         self.log({"event": "ready", "runtime": "hermes", "agent_id": self_id})
 
-        ws_base = self.client.base_url.replace("http://", "ws://").replace("https://", "wss://")
+        parsed_base = urllib.parse.urlparse(self.client.base_url)
+        ws_scheme = "wss" if parsed_base.scheme == "https" else "ws"
+        ws_base = urllib.parse.urlunparse(parsed_base._replace(scheme=ws_scheme))
         ws_url = f"{ws_base}/api/v1/ws/agent?token={urllib.parse.quote(self.client.token)}"
 
         backoff = 0.5

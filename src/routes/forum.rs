@@ -527,35 +527,26 @@ enum PostScope {
     Following(Uuid),
 }
 
-async fn query_posts(
-    state: &AppState,
-    scope: PostScope,
-    query: ListBoardPostsQuery,
-) -> Result<PostListResponse, AppError> {
-    enum PostPageCursor {
-        Active(Vec<Uuid>),
-        Timestamp(DateTime<Utc>, Uuid),
-    }
-    let cursor = query
-        .cursor
-        .as_deref()
-        .map(|encoded| match query.sort {
-            PostSortOrder::Active => decode_active_cursor(encoded).map(PostPageCursor::Active),
-            PostSortOrder::Newest => decode_keyset_cursor(encoded)
+enum PostPageCursor {
+    Active(Vec<Uuid>),
+    Timestamp(DateTime<Utc>, Uuid),
+}
+
+fn decode_post_page_cursor(
+    sort: PostSortOrder,
+    encoded: Option<&str>,
+) -> Result<Option<PostPageCursor>, AppError> {
+    encoded
+        .map(|raw| match sort {
+            PostSortOrder::Active => decode_active_cursor(raw).map(PostPageCursor::Active),
+            PostSortOrder::Newest => decode_keyset_cursor(raw)
                 .map(|(timestamp, id)| PostPageCursor::Timestamp(timestamp, id)),
         })
-        .transpose()?;
-    let sort_column = match query.sort {
-        PostSortOrder::Active => "p.last_activity_at",
-        PostSortOrder::Newest => "p.created_at",
-    };
-    let mut statement = QueryBuilder::<Postgres>::new(
-        "SELECT p.id, p.board_id, p.author_agent_id, p.client_req_id, p.title, p.content,
-                p.mention_agent_ids, p.comment_count, p.last_activity_at, p.created_at
-         FROM posts p",
-    );
+        .transpose()
+}
 
-    let board_id = match scope {
+fn apply_post_scope(statement: &mut QueryBuilder<'_, Postgres>, scope: PostScope) -> Option<Uuid> {
+    match scope {
         PostScope::Visible {
             platform_authenticated,
             board_id,
@@ -583,7 +574,66 @@ async fn query_posts(
                 .push("))");
             None
         }
+    }
+}
+
+fn apply_post_cursor<'a>(
+    statement: &mut QueryBuilder<'a, Postgres>,
+    sort: PostSortOrder,
+    page_cursor: Option<&'a PostPageCursor>,
+) {
+    let Some(page_cursor) = page_cursor else {
+        return;
     };
+    match page_cursor {
+        PostPageCursor::Active(seen_ids) => {
+            statement
+                .push(" AND p.id <> ALL(")
+                .push_bind(seen_ids)
+                .push(")");
+        }
+        PostPageCursor::Timestamp(boundary_ts, boundary_id) => {
+            let sort_column = match sort {
+                PostSortOrder::Active => "p.last_activity_at",
+                PostSortOrder::Newest => "p.created_at",
+            };
+            statement
+                .push(" AND (")
+                .push(sort_column)
+                .push(", p.id) < (")
+                .push_bind(boundary_ts)
+                .push(", ")
+                .push_bind(boundary_id)
+                .push(")");
+        }
+    }
+}
+
+fn active_cursor_for_page(previous: Option<PostPageCursor>, posts: &[PostView]) -> Option<String> {
+    let mut seen_ids = match previous {
+        Some(PostPageCursor::Active(seen_ids)) => seen_ids,
+        _ => Vec::new(),
+    };
+    seen_ids.extend(posts.iter().map(|post| post.id));
+    Some(encode_active_cursor(&seen_ids))
+}
+
+async fn query_posts(
+    state: &AppState,
+    scope: PostScope,
+    query: ListBoardPostsQuery,
+) -> Result<PostListResponse, AppError> {
+    let cursor = decode_post_page_cursor(query.sort, query.cursor.as_deref())?;
+    let sort_column = match query.sort {
+        PostSortOrder::Active => "p.last_activity_at",
+        PostSortOrder::Newest => "p.created_at",
+    };
+    let mut statement = QueryBuilder::<Postgres>::new(
+        "SELECT p.id, p.board_id, p.author_agent_id, p.client_req_id, p.title, p.content,
+                p.mention_agent_ids, p.comment_count, p.last_activity_at, p.created_at
+         FROM posts p",
+    );
+    let board_id = apply_post_scope(&mut statement, scope);
     if let Some(text) = query.q {
         let pattern = literal_search_pattern(text.as_str());
         statement
@@ -593,26 +643,7 @@ async fn query_posts(
             .push_bind(pattern)
             .push(")");
     }
-    if let Some(page_cursor) = &cursor {
-        match page_cursor {
-            PostPageCursor::Active(seen_ids) => {
-                statement
-                    .push(" AND p.id <> ALL(")
-                    .push_bind(seen_ids)
-                    .push(")");
-            }
-            PostPageCursor::Timestamp(boundary_ts, boundary_id) => {
-                statement
-                    .push(" AND (")
-                    .push(sort_column)
-                    .push(", p.id) < (")
-                    .push_bind(boundary_ts)
-                    .push(", ")
-                    .push_bind(boundary_id)
-                    .push(")");
-            }
-        }
-    }
+    apply_post_cursor(&mut statement, query.sort, cursor.as_ref());
     let limit = query.limit.get();
     statement
         .push(" ORDER BY ")
@@ -629,14 +660,7 @@ async fn query_posts(
     }
     let next_cursor = if has_more {
         match query.sort {
-            PostSortOrder::Active => {
-                let mut seen_ids = match cursor {
-                    Some(PostPageCursor::Active(seen_ids)) => seen_ids,
-                    _ => Vec::new(),
-                };
-                seen_ids.extend(posts.iter().map(|post| post.id));
-                Some(encode_active_cursor(&seen_ids))
-            }
+            PostSortOrder::Active => active_cursor_for_page(cursor, &posts),
             PostSortOrder::Newest => posts
                 .last()
                 .map(|post| encode_keyset_cursor(post.created_at, post.id)),

@@ -160,6 +160,14 @@ export class AgentMeshApiError extends Error {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === '/') {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
 export function resolveAgentMeshConfig(
   override?: Partial<AgentMeshClientConfig>,
   env: NodeJS.ProcessEnv = process.env,
@@ -168,7 +176,7 @@ export function resolveAgentMeshConfig(
   if (!rawUrl) {
     throw new Error('AGENTMESH_URL cannot be empty');
   }
-  const baseUrl = rawUrl.replace(/\/+$/, '');
+  const baseUrl = stripTrailingSlashes(rawUrl);
   const token = (override?.token ?? env.AGENTMESH_TOKEN ?? '').trim();
   if (!token) {
     throw new Error('AGENTMESH_TOKEN is required');
@@ -187,7 +195,7 @@ export class AgentMeshClient {
   private agentsBySlug = new Map<string, string>();
 
   constructor(config: AgentMeshClientConfig) {
-    this.baseUrl = config.baseUrl.replace(/\/+$/, '');
+    this.baseUrl = stripTrailingSlashes(config.baseUrl);
     this.token = requireNonEmpty(config.token, 'token');
     this.fetchImpl = config.fetchImpl ?? globalThis.fetch;
   }
