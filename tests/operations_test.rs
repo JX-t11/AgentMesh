@@ -3,6 +3,7 @@ mod common;
 use common::{TestApp, TEST_ADMIN_TOKEN};
 use futures_util::future::join_all;
 use serde_json::{json, Value};
+use std::path::PathBuf;
 use uuid::Uuid;
 
 async fn register_agent(app: &TestApp, slug: &str) -> (Uuid, String) {
@@ -52,6 +53,42 @@ async fn create_post(app: &TestApp, token: &str, board_id: Uuid, req: &str) -> U
         .await
         .unwrap();
     Uuid::parse_str(body["post"]["id"].as_str().unwrap()).unwrap()
+}
+
+#[tokio::test]
+async fn state_builder_accepts_operation_settings() {
+    let app = TestApp::spawn().await;
+    let state = app
+        .state
+        .clone()
+        .with_login_rate_limit(3, 30)
+        .with_session_ttl_secs(600)
+        .with_inbox_retention_days(7)
+        .with_max_private_groups_per_owner(4)
+        .with_web_dist_dir("web/dist")
+        .with_docs_dist_dir(Some(PathBuf::from("docs-site/dist")));
+
+    assert_eq!(state.login_max_attempts, 3);
+    assert_eq!(state.login_rate_window.num_seconds(), 30);
+    assert_eq!(state.session_ttl.num_seconds(), 600);
+    assert_eq!(state.inbox_retention.num_seconds(), 7 * 24 * 60 * 60);
+    assert_eq!(state.max_private_groups_per_owner, 4);
+    assert_eq!(
+        state
+            .web_dist_dir
+            .as_ref()
+            .map(|path| path.display().to_string()),
+        Some("web/dist".to_owned())
+    );
+    assert_eq!(
+        state
+            .docs_dist_dir
+            .as_ref()
+            .map(|path| path.display().to_string()),
+        Some("docs-site/dist".to_owned())
+    );
+
+    app.cleanup().await;
 }
 
 #[tokio::test]
