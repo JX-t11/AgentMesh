@@ -1,11 +1,11 @@
 import { createServer } from 'node:http';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import plugin from '../index.js';
 import { AgentMeshApiError, AgentMeshClient, InboxEventView } from '../client.js';
-import { AgentMeshBridgeDaemon, FileCursorStore } from '../daemon.js';
+import { AgentMeshBridgeDaemon, createOpenClawTurnRunner, FileCursorStore } from '../daemon.js';
 
 const tempDirs: string[] = [];
 
@@ -661,6 +661,84 @@ describe('openclaw-agentmesh plugin & client', () => {
       expect((error as AgentMeshApiError).status).toBe(500);
     } finally {
       server.close();
+    }
+  });
+
+  it('runs turn commands and closes a websocket cleanly on daemon stop', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'openclaw-runner-'));
+    tempDirs.push(dir);
+    const successBin = join(dir, 'openclaw-success');
+    const failedBin = join(dir, 'openclaw-failed');
+    writeFileSync(successBin, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    writeFileSync(failedBin, '#!/bin/sh\necho boom >&2\nexit 3\n', { mode: 0o755 });
+
+    const successRunner = createOpenClawTurnRunner({
+      binaryPath: successBin,
+      sessionId: 'session-1',
+      agentId: 'agent-1',
+      rolePrompt: 'Be concise',
+    });
+    await expect(successRunner({ kind: 'intent', key: 'intent:test', prompt: 'Do the work' })).resolves.toBeUndefined();
+
+    const failedRunner = createOpenClawTurnRunner({ binaryPath: failedBin, sessionId: 'session-1' });
+    await expect(failedRunner({ kind: 'inbox', key: 'inbox:1', prompt: 'Do the work' })).rejects.toThrow('openclaw exited with code 3');
+
+    const fetchImpl = async (input: unknown): Promise<Response> => {
+      const url = String(input);
+      const json = (payload: unknown) => new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
+      if (url.endsWith('/api/v1/agents/me')) return json({ agent: { id: selfId, slug: 'openclaw-alpha', display_name: 'Alpha', framework: 'openclaw' } });
+      if (url.endsWith('/api/v1/agents')) return json({ agents: [] });
+      if (url.includes('/api/v1/inbox')) return json({ items: [], next_after_inbox_seq: 0, acked_inbox_seq: 0, has_more: false });
+      return json({ error: { code: 'not_found', message: 'not found' } }, { status: 404 } as ResponseInit);
+    };
+    const selfId = '11111111-1111-4111-8111-111111111111';
+    const client = new AgentMeshClient({ baseUrl: 'http://127.0.0.1:1', token: 'amesh_tok', fetchImpl });
+
+    let loggingDaemon!: AgentMeshBridgeDaemon;
+    class CloseAfterOpenWebSocket {
+      static OPEN = 1;
+      readyState = CloseAfterOpenWebSocket.OPEN;
+      onopen?: () => void;
+      onclose?: () => void;
+      onerror?: () => void;
+      onmessage?: () => void;
+      #listeners = new Map<string, Array<() => void>>();
+
+      constructor(readonly url: string) {
+        queueMicrotask(() => {
+          loggingDaemon.stop();
+          this.close();
+        });
+      }
+
+      addEventListener(type: string, listener: () => void): void {
+        this.#listeners.set(type, [...(this.#listeners.get(type) ?? []), listener]);
+        if (type === 'open') this.onopen = listener;
+        if (type === 'close') this.onclose = listener;
+        if (type === 'error') this.onerror = listener;
+        if (type === 'message') this.onmessage = listener;
+      }
+
+      removeEventListener(type: string, listener: () => void): void {
+        this.#listeners.set(type, (this.#listeners.get(type) ?? []).filter((item) => item !== listener));
+      }
+
+      send(): void {}
+
+      close(): void {
+        for (const listener of this.#listeners.get('close') ?? []) listener();
+      }
+    }
+    const originalWebSocket = globalThis.WebSocket;
+    const globalWithSocket = globalThis as typeof globalThis & { WebSocket: unknown };
+    globalWithSocket.WebSocket = CloseAfterOpenWebSocket;
+
+    try {
+      loggingDaemon = new AgentMeshBridgeDaemon(client, new FileCursorStore(join(dir, 'cursor.json')), async () => {}, () => {});
+      await loggingDaemon.runForever();
+      expect(loggingDaemon).toBeDefined();
+    } finally {
+      globalWithSocket.WebSocket = originalWebSocket;
     }
   });
 });
