@@ -307,84 +307,133 @@ async fn handle_observer_command(
     raw: &str,
 ) -> bool {
     let Ok(cmd) = serde_json::from_str::<ClientAction>(raw) else {
-        let err = encode_event(&json!({
-            "type": "error",
-            "code": "invalid_command",
-            "message": "invalid observer JSON command",
-        }));
-        return socket.send(Message::Text(err)).await.is_ok();
+        return send_observer_error(
+            socket,
+            "invalid_command",
+            None,
+            "invalid observer JSON command",
+        )
+        .await;
     };
 
     match cmd.action.as_str() {
-        "ping" => {
-            let pong = encode_event(&json!({ "type": "pong" }));
-            socket.send(Message::Text(pong)).await.is_ok()
-        }
+        "ping" => socket
+            .send(Message::Text(encode_event(&json!({ "type": "pong" }))))
+            .await
+            .is_ok(),
         "subscribe" => {
-            for gid in cmd.groups {
-                if !group_streams.contains_key(&gid) && group_streams.len() >= MAX_OBSERVER_GROUPS {
-                    let err = encode_event(&json!({
-                        "type": "error",
-                        "code": "subscription_limit",
-                        "message": "exceeded maximum subscribed groups per observer connection",
-                    }));
-                    return socket.send(Message::Text(err)).await.is_ok();
-                }
-                if let Err(err) = ensure_can_subscribe_group_stream(state, gid, viewer).await {
-                    let msg = match err {
-                        AppError::Forbidden(m) => m,
-                        other => format!("{other:?}"),
-                    };
-                    let frame = encode_event(&json!({
-                        "type": "error",
-                        "code": "forbidden",
-                        "group_id": gid,
-                        "message": msg,
-                    }));
-                    return socket.send(Message::Text(frame)).await.is_ok();
-                }
-                if !group_streams.contains_key(&gid) {
-                    group_streams
-                        .insert(gid, BroadcastStream::new(state.events.subscribe_group(gid)));
-                }
-            }
-            if cmd.forum == Some(true) && forum_stream.is_none() {
-                *forum_stream = Some(BroadcastStream::new(
-                    state
-                        .events
-                        .subscribe_forum(viewer.is_platform_authenticated()),
-                ));
-            }
-            let ack = encode_event(&json!({
-                "type": "subscribed",
-                "groups": group_streams.keys().copied().collect::<Vec<_>>(),
-                "forum": forum_stream.is_some(),
-            }));
-            socket.send(Message::Text(ack)).await.is_ok()
+            handle_observer_subscribe(socket, state, viewer, group_streams, forum_stream, cmd).await
         }
         "unsubscribe" => {
-            for gid in cmd.groups {
-                if group_streams.remove(&gid).is_some() {
-                    state.events.cleanup_group_if_idle(gid);
-                }
-            }
-            if cmd.forum == Some(true) {
-                *forum_stream = None;
-            }
-            let ack = encode_event(&json!({
-                "type": "subscribed",
-                "groups": group_streams.keys().copied().collect::<Vec<_>>(),
-                "forum": forum_stream.is_some(),
-            }));
-            socket.send(Message::Text(ack)).await.is_ok()
+            handle_observer_unsubscribe(socket, state, group_streams, forum_stream, cmd).await
         }
         _ => {
-            let err = encode_event(&json!({
-                "type": "error",
-                "code": "read_only_stream",
-                "message": "observer stream only allows subscribe, unsubscribe, and ping",
-            }));
-            socket.send(Message::Text(err)).await.is_ok()
+            send_observer_error(
+                socket,
+                "read_only_stream",
+                None,
+                "observer stream only allows subscribe, unsubscribe, and ping",
+            )
+            .await
         }
     }
+}
+
+async fn handle_observer_subscribe(
+    socket: &mut WebSocket,
+    state: &AppState,
+    viewer: &OptionalViewer,
+    group_streams: &mut StreamMap<Uuid, BroadcastStream<Utf8Bytes>>,
+    forum_stream: &mut Option<BroadcastStream<Utf8Bytes>>,
+    cmd: ClientAction,
+) -> bool {
+    for gid in cmd.groups {
+        if !group_streams.contains_key(&gid) && group_streams.len() >= MAX_OBSERVER_GROUPS {
+            return send_observer_error(
+                socket,
+                "subscription_limit",
+                None,
+                "exceeded maximum subscribed groups per observer connection",
+            )
+            .await;
+        }
+        if let Err(err) = ensure_can_subscribe_group_stream(state, gid, viewer).await {
+            return send_observer_error(
+                socket,
+                "forbidden",
+                Some(gid),
+                &observer_error_message(err),
+            )
+            .await;
+        }
+        if !group_streams.contains_key(&gid) {
+            group_streams.insert(gid, BroadcastStream::new(state.events.subscribe_group(gid)));
+        }
+    }
+    if cmd.forum == Some(true) && forum_stream.is_none() {
+        *forum_stream = Some(BroadcastStream::new(
+            state
+                .events
+                .subscribe_forum(viewer.is_platform_authenticated()),
+        ));
+    }
+    send_observer_ack(socket, group_streams, forum_stream).await
+}
+
+async fn handle_observer_unsubscribe(
+    socket: &mut WebSocket,
+    state: &AppState,
+    group_streams: &mut StreamMap<Uuid, BroadcastStream<Utf8Bytes>>,
+    forum_stream: &mut Option<BroadcastStream<Utf8Bytes>>,
+    cmd: ClientAction,
+) -> bool {
+    for gid in cmd.groups {
+        if group_streams.remove(&gid).is_some() {
+            state.events.cleanup_group_if_idle(gid);
+        }
+    }
+    if cmd.forum == Some(true) {
+        *forum_stream = None;
+    }
+    send_observer_ack(socket, group_streams, forum_stream).await
+}
+
+async fn send_observer_ack(
+    socket: &mut WebSocket,
+    group_streams: &StreamMap<Uuid, BroadcastStream<Utf8Bytes>>,
+    forum_stream: &Option<BroadcastStream<Utf8Bytes>>,
+) -> bool {
+    let ack = encode_event(&json!({
+        "type": "subscribed",
+        "groups": group_streams.keys().copied().collect::<Vec<_>>(),
+        "forum": forum_stream.is_some(),
+    }));
+    socket.send(Message::Text(ack)).await.is_ok()
+}
+
+fn observer_error_message(error: AppError) -> String {
+    match error {
+        AppError::Forbidden(message) => message,
+        other => format!("{other:?}"),
+    }
+}
+
+async fn send_observer_error(
+    socket: &mut WebSocket,
+    code: &str,
+    group_id: Option<Uuid>,
+    message: &str,
+) -> bool {
+    let mut payload = json!({
+        "type": "error",
+        "code": code,
+        "message": message,
+    });
+    if let Some(group_id) = group_id {
+        payload["group_id"] = json!(group_id);
+    }
+    socket
+        .send(Message::Text(encode_event(&payload)))
+        .await
+        .is_ok()
 }

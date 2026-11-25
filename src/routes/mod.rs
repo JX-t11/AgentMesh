@@ -17,6 +17,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
+use std::path::PathBuf;
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
@@ -38,7 +39,6 @@ const LEGACY_DOCS_REDIRECTS: [(&str, &str); 6] = [
 pub fn build_router(state: AppState) -> Router {
     let max_body = state.max_body_bytes;
     let web_dist_dir = state.web_dist_dir.clone();
-
     let api_router = Router::new()
         .route("/v1/health", get(health))
         .route("/v1/admin/metrics", get(observability::metrics))
@@ -210,44 +210,13 @@ pub fn build_router(state: AppState) -> Router {
 
     // Starlight 文档站托管在 /docs 前缀下（DOCS_DIST_DIR 默认 docs-site/dist）；
     // 仅当产物入口存在时挂载，否则 /docs 仍归 SPA。
-    let docs_dist_dir = state
+    if let Some(docs_dir) = state
         .docs_dist_dir
         .clone()
-        .filter(|dir| dir.join("index.html").is_file());
-    if let Some(docs_dir) = docs_dist_dir {
+        .filter(|dir| dir.join("index.html").is_file())
+    {
         tracing::info!(docs_dir = %docs_dir.display(), "serving Starlight docs static assets at /docs");
-        // 旧文档地址由 SPA 工作区迁到 /docs/guides/*，显式路由避免被 nest_service 的兜底吞掉。
-        for (legacy, canonical) in LEGACY_DOCS_REDIRECTS {
-            router = router.route(
-                legacy,
-                get(move || async move { Redirect::permanent(canonical) }),
-            );
-        }
-        // axum nest_service 会剥掉 /docs 前缀，ServeDir 的目录重定向因此丢失前缀
-        // （/docs/guides/x → /guides/x/，浏览器跟随后落入 SPA）。这里把前缀补回去。
-        // 未命中的文档路径返回 Starlight 的 404 页面，not_found_service 保留 404 状态码。
-        let not_found = ServeFile::new(docs_dir.join("404.html"));
-        let docs = tower::util::MapResponse::new(
-            ServeDir::new(docs_dir).not_found_service(not_found),
-            |mut res: axum::response::Response<
-                tower_http::services::fs::ServeFileSystemResponseBody,
-            >| {
-                if res.status().is_redirection() {
-                    if let Some(loc) = res.headers().get(header::LOCATION).cloned() {
-                        let loc = loc.to_str().unwrap_or_default().to_owned();
-                        if loc.starts_with('/') && !loc.starts_with("/docs") {
-                            if let Ok(value) =
-                                header::HeaderValue::from_str(&format!("/docs{}", loc))
-                            {
-                                res.headers_mut().insert(header::LOCATION, value);
-                            }
-                        }
-                    }
-                }
-                res
-            },
-        );
-        router = router.nest_service("/docs", docs);
+        router = router.merge(docs_router(docs_dir));
     } else if let Some(docs_dir) = state.docs_dist_dir.clone() {
         tracing::warn!(docs_dir = %docs_dir.display(), "docs dist missing; /docs falls back to SPA");
     }
@@ -257,8 +226,8 @@ pub fn build_router(state: AppState) -> Router {
         if index_file.is_file() {
             tracing::info!(dist_dir = %dist_dir.display(), "serving observer web UI static assets");
             // 使用 fallback 而非 not_found_service：后者会强行把 SPA 入口回退状态码覆写为 404。
-            let static_service = ServeDir::new(dist_dir).fallback(ServeFile::new(index_file));
-            router = router.fallback_service(static_service);
+            router = router
+                .fallback_service(ServeDir::new(dist_dir).fallback(ServeFile::new(index_file)));
         }
     }
 
@@ -272,6 +241,45 @@ pub fn build_router(state: AppState) -> Router {
         ))
         .layer(axum::middleware::from_fn(crate::observability::request_id))
         .with_state(state)
+}
+
+fn legacy_docs_router() -> Router<AppState> {
+    let mut router = Router::new();
+    for (legacy, canonical) in LEGACY_DOCS_REDIRECTS {
+        router = router.route(
+            legacy,
+            get(move || async move { Redirect::permanent(canonical) }),
+        );
+    }
+    router
+}
+
+fn docs_router(docs_dir: PathBuf) -> Router<AppState> {
+    let not_found = ServeFile::new(docs_dir.join("404.html"));
+    let docs = tower::util::MapResponse::new(
+        ServeDir::new(docs_dir).not_found_service(not_found),
+        |mut res: axum::response::Response<
+            tower_http::services::fs::ServeFileSystemResponseBody,
+        >| {
+            if res.status().is_redirection() {
+                if let Some(location) = prefixed_docs_location(&res) {
+                    res.headers_mut().insert(header::LOCATION, location);
+                }
+            }
+            res
+        },
+    );
+    legacy_docs_router().nest_service("/docs", docs)
+}
+
+fn prefixed_docs_location(
+    response: &axum::response::Response<tower_http::services::fs::ServeFileSystemResponseBody>,
+) -> Option<header::HeaderValue> {
+    let location = response.headers().get(header::LOCATION)?.to_str().ok()?;
+    if !location.starts_with('/') || location.starts_with("/docs") {
+        return None;
+    }
+    header::HeaderValue::from_str(&format!("/docs{location}")).ok()
 }
 
 async fn health(State(state): State<AppState>) -> Result<Json<Value>, AppError> {

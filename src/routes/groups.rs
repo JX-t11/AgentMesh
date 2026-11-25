@@ -1045,7 +1045,28 @@ pub(crate) async fn ensure_can_view_group(
     group_id: Uuid,
     viewer: &OptionalViewer,
 ) -> Result<(), AppError> {
-    let row: Option<GroupAccessRow> = sqlx::query_as(
+    let row = fetch_group_access(state, group_id).await?;
+
+    if is_public_channel(&row) {
+        return Ok(());
+    }
+
+    match viewer {
+        OptionalViewer::Anonymous => Err(AppError::Forbidden(
+            "authorization required to access private group or DM channel".into(),
+        )),
+        OptionalViewer::Admin => Ok(()),
+        OptionalViewer::Agent(agent) => {
+            ensure_agent_can_view_group(state, group_id, agent.id, &row).await
+        }
+        OptionalViewer::User(user) => {
+            ensure_user_can_view_group(state, group_id, user.id, &row).await
+        }
+    }
+}
+
+async fn fetch_group_access(state: &AppState, group_id: Uuid) -> Result<GroupAccessRow, AppError> {
+    sqlx::query_as(
         "SELECT g.is_dm,
                 g.visibility,
                 g.creator_user_id,
@@ -1057,66 +1078,81 @@ pub(crate) async fn ensure_can_view_group(
     )
     .bind(group_id)
     .fetch_optional(&state.db)
-    .await?;
+    .await?
+    .ok_or_else(|| AppError::NotFound("group not found".into()))
+}
 
-    let row = row.ok_or_else(|| AppError::NotFound("group not found".into()))?;
+fn is_public_channel(row: &GroupAccessRow) -> bool {
+    !row.is_dm && row.visibility == "public"
+}
 
-    if !row.is_dm && row.visibility == "public" {
+async fn ensure_agent_can_view_group(
+    state: &AppState,
+    group_id: Uuid,
+    agent_id: Uuid,
+    row: &GroupAccessRow,
+) -> Result<(), AppError> {
+    if !row.is_dm && row.creator_agent_id == Some(agent_id) {
         return Ok(());
     }
-
-    match viewer {
-        OptionalViewer::Anonymous => Err(AppError::Forbidden(
-            "authorization required to access private group or DM channel".into(),
-        )),
-        OptionalViewer::Admin => Ok(()),
-        OptionalViewer::Agent(agent) => {
-            if !row.is_dm && row.creator_agent_id == Some(agent.id) {
-                return Ok(());
-            }
-            let is_member: bool = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM group_members WHERE group_id = $1 AND agent_id = $2)",
-            )
-            .bind(group_id)
-            .bind(agent.id)
-            .fetch_one(&state.db)
-            .await?;
-            if is_member {
-                Ok(())
-            } else {
-                Err(AppError::Forbidden(
-                    "agent is not a member of this private group or DM".into(),
-                ))
-            }
-        }
-        OptionalViewer::User(user) => {
-            if !row.is_dm
-                && (row.creator_user_id == Some(user.id)
-                    || row.creator_agent_owner_user_id == Some(user.id))
-            {
-                return Ok(());
-            }
-            let owns_member: bool = sqlx::query_scalar(
-                "SELECT EXISTS(
-                     SELECT 1
-                     FROM group_members gm
-                     JOIN agents a ON a.id = gm.agent_id
-                     WHERE gm.group_id = $1 AND a.owner_user_id = $2
-                 )",
-            )
-            .bind(group_id)
-            .bind(user.id)
-            .fetch_one(&state.db)
-            .await?;
-            if owns_member {
-                Ok(())
-            } else {
-                Err(AppError::Forbidden(
-                    "none of your agents belong to this private group or DM".into(),
-                ))
-            }
-        }
+    if agent_is_member(state, group_id, agent_id).await? {
+        return Ok(());
     }
+    Err(AppError::Forbidden(
+        "agent is not a member of this private group or DM".into(),
+    ))
+}
+
+async fn agent_is_member(
+    state: &AppState,
+    group_id: Uuid,
+    agent_id: Uuid,
+) -> Result<bool, AppError> {
+    let is_member: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM group_members WHERE group_id = $1 AND agent_id = $2)",
+    )
+    .bind(group_id)
+    .bind(agent_id)
+    .fetch_one(&state.db)
+    .await?;
+    Ok(is_member)
+}
+
+async fn ensure_user_can_view_group(
+    state: &AppState,
+    group_id: Uuid,
+    user_id: Uuid,
+    row: &GroupAccessRow,
+) -> Result<(), AppError> {
+    let is_creator = !row.is_dm
+        && (row.creator_user_id == Some(user_id)
+            || row.creator_agent_owner_user_id == Some(user_id));
+    if is_creator || user_owns_member(state, group_id, user_id).await? {
+        return Ok(());
+    }
+    Err(AppError::Forbidden(
+        "none of your agents belong to this private group or DM".into(),
+    ))
+}
+
+async fn user_owns_member(
+    state: &AppState,
+    group_id: Uuid,
+    user_id: Uuid,
+) -> Result<bool, AppError> {
+    let owns_member: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+             SELECT 1
+             FROM group_members gm
+             JOIN agents a ON a.id = gm.agent_id
+             WHERE gm.group_id = $1 AND a.owner_user_id = $2
+         )",
+    )
+    .bind(group_id)
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await?;
+    Ok(owns_member)
 }
 
 async fn resolve_group_creation_caller(
