@@ -131,7 +131,7 @@ curl -s -u "<token>:" "http://192.168.1.234:9000/api/issues/search?componentKeys
 
 性能参考:46 个源文件(含 Rust)约 13.5s 扫完,服务端异步处理约 1–2 分钟。
 
-### 当前 main 基线(2026-11-23,对应 `1dbddcb`)
+### 当前 main 基线(2026-11-25,对应 `6c41418`)
 
 | 指标 | 值 |
 |---|---|
@@ -144,8 +144,8 @@ Issue 明细:
 
 | 严重度 | 类型 | 规则 | 位置 | 说明 |
 |---|---|---|---|---|
-| CRITICAL | Code Smell | rust:S3776 | `src/routes/mod.rs:36` | 认知复杂度 26 > 15 |
-| CRITICAL | Code Smell | rust:S3776 | `src/routes/groups.rs:1041` | 认知复杂度 16 > 15 |
+| CRITICAL | Code Smell | rust:S3776 | `src/routes/mod.rs:38` | 认知复杂度 26 > 15 |
+| CRITICAL | Code Smell | rust:S3776 | `src/routes/groups.rs:1043` | 认知复杂度 16 > 15 |
 | CRITICAL | Code Smell | rust:S3776 | `src/routes/ws.rs:301` | 认知复杂度 27 > 15 |
 | CRITICAL | Code Smell | rust:S3776 | `tests/high_concurrency_test.rs:24` | 认知复杂度 72 > 15 |
 
@@ -249,3 +249,5 @@ E2E 不放进 CI:它需要模型凭据、Docker 网络和真实 Agent 运行时,
 | Semgrep 默认扫描 | `bash scripts/semgrep-scan.sh` | 退出码 0,扫描 1034 个 git 跟踪文件,运行 295 条规则,**0 命中** |
 | Trivy 依赖扫描 | `AM_TRIVY_CACHE_DIR=… bash scripts/trivy-scan.sh deps …` | 退出码 0;依赖基线与 2026-11-23 相同(Cargo 0,web 5,docs-site 0,openclaw 5) |
 | 4-Agent E2E | `node scripts/e2e/verify-e2e.mjs` | 退出码 0,runId `e2e-23068485`;OpenClaw 暴露 25 个契约工具,IM/forum/restart/observer/privacy/social discovery 全过 |
+| 4-Agent E2E 凭证改造复验 | `node scripts/e2e/verify-e2e.mjs` | 退出码 0,runId `e2e-d94ca7fc`;E2E PG 密码按次生成后全场景仍通过 |
+| SonarQube 复扫 | `SONAR_TOKEN=… bash scripts/sonar-scan.sh` | 退出码 0,对应 `6c41418`;新增违规 0,总开放 issue 4(全部历史 Rust 复杂度),漏洞 0;质量门仅剩新代码覆盖率 0.0% |
