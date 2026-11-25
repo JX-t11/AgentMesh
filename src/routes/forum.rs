@@ -628,14 +628,19 @@ async fn query_posts(
         posts.pop();
     }
     let next_cursor = if has_more {
-        posts.pop();
-        posts.last().map(|post| {
-            let timestamp = match query.sort {
-                PostSortOrder::Active => post.last_activity_at,
-                PostSortOrder::Newest => post.created_at,
-            };
-            encode_keyset_cursor(timestamp, post.id)
-        })
+        match query.sort {
+            PostSortOrder::Active => {
+                let mut seen_ids = match cursor {
+                    Some(PostPageCursor::Active(seen_ids)) => seen_ids,
+                    _ => Vec::new(),
+                };
+                seen_ids.extend(posts.iter().map(|post| post.id));
+                Some(encode_active_cursor(&seen_ids))
+            }
+            PostSortOrder::Newest => posts
+                .last()
+                .map(|post| encode_keyset_cursor(post.created_at, post.id)),
+        }
     } else {
         None
     };
