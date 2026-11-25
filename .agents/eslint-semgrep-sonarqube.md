@@ -117,9 +117,11 @@ bash scripts/semgrep-scan.sh p/owasp-top-ten p/rust     # 指定多组规则
 ### 关键限制(Community Build)
 
 - **只扫默认分支**:共享实例只接受干净的 `main`(`scripts/sonar-scan.sh` 内置守卫,非干净 main 直接退出码 2);特性分支/工作区改动要扫需自建隔离实例(`SONAR_HOST_URL` 指向它)。本地增量反馈交给 ESLint/Semgrep。
-- 语言覆盖:TS/JS/TSX、CSS、Dockerfile;当前实例也会分析 Rust(扫描日志包含 `rust:S3776`)。Rust 的提交门禁仍以 `cargo fmt`、`clippy -D warnings` 和 `cargo test` 为准,SonarQube 只作为趋势看板。YAML 和 shell 不在 SonarQube 覆盖内,由 Semgrep 承担。
+- 语言覆盖:TS/JS/TSX、CSS、Python、Dockerfile;当前实例也会分析 Rust(支持 LCOV/Cobertura 覆盖率、复杂度与 Clippy 外部规则)。Rust 的提交门禁仍以 `cargo fmt`、`clippy -D warnings` 和覆盖率全量测试为准,SonarQube 只作为趋势看板。YAML 和 shell 不在 SonarQube 覆盖内,由 Semgrep 承担。
 
 ### 用法
+
+先运行 `bash scripts/coverage.sh` 生成四份覆盖率报告；`scripts/sonar-scan.sh` 会检查这些文件，防止误扫出 0% 假基线。
 
 ```bash
 SONAR_TOKEN=<token> bash scripts/sonar-scan.sh          # 只在干净 main 上
@@ -148,7 +150,7 @@ curl -s -u "<token>:" "http://192.168.1.234:9000/api/issues/search?componentKeys
 | 写代码时(编辑器/保存) | ESLint 实时检查 |
 | 提交前 | `cd web && npm run lint` |
 | PR 前 / 定期审计 | `npm run lint:typed` + `bash scripts/semgrep-scan.sh` + `bash scripts/trivy-scan.sh deps` |
-| main 收敛趋势 / 发版前 | `scripts/sonar-scan.sh` + 看板 |
+| main 收敛趋势 / 发版前 | `bash scripts/coverage.sh` + `scripts/sonar-scan.sh` + 看板 |
 | 依赖更新 | Dependabot 周更 PR,走 CI 与人工审查 |
 | 图片/制品发布前 | `bash scripts/trivy-scan.sh images` |
 

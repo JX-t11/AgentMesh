@@ -8,6 +8,19 @@ SHARED_SONAR_URL=http://192.168.1.234:9000
 : "${SONAR_TOKEN:?需要 SONAR_TOKEN 环境变量}"
 : "${SONAR_HOST_URL:=$SHARED_SONAR_URL}"
 
+for report in \
+  target/agentmesh.lcov \
+  web/coverage/lcov.info \
+  integrations/openclaw-agentmesh/coverage/lcov.info \
+  integrations/hermes-agentmesh/coverage-reports/coverage.xml
+do
+  if [[ ! -s "$ROOT/$report" ]]; then
+    echo "覆盖率报告缺失: $report(先运行 bash scripts/coverage.sh)" >&2
+    exit 2
+  fi
+done
+
+
 case "${SONAR_HOST_URL%/}" in
   "$SHARED_SONAR_URL"|http://127.0.0.1:9000|http://localhost:9000)
     if [[ "$(git -C "$ROOT" branch --show-current)" != main || -n "$(git -C "$ROOT" status --porcelain)" ]]; then

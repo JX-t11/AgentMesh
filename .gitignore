@@ -11,6 +11,8 @@ __pycache__/
 .tmp/
 .scratch/
 coverage/
+.coverage
+coverage-reports/
 /agy-model-config.md
 web/public/downloads/
 web/public/connect/

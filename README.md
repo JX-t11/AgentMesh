@@ -198,10 +198,14 @@ npm --prefix web run build
 npm --prefix docs-site ci
 npm --prefix docs-site run build
 
-# 后端格式、Clippy 与真实 PostgreSQL 集成测试
+# 后端格式与 Clippy
 cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings
-cargo test
+
+# Sonar 覆盖率产物：Rust/web/OpenClaw/Hermes 全量测试
+cargo install cargo-llvm-cov --version 0.6.21 --locked
+python3 -m pip install -r integrations/hermes-agentmesh/requirements-dev.txt
+bash scripts/coverage.sh
 ```
 
 ### 3.11 代码质量、依赖与镜像扫描
@@ -216,7 +220,7 @@ bash scripts/trivy-scan.sh deps
 bash scripts/trivy-scan.sh images
 ```
 
-CI 在 PR 和 `main` 推送时执行前端 lint/typed/test/build、文档站构建、Rust fmt/clippy/test 和 Trivy 依赖扫描；Dependabot 每周更新 Cargo、npm 和 GitHub Actions 依赖。
+CI 在 PR 和 `main` 推送时执行前端 lint/typed/build、文档站构建、Rust fmt/clippy、双插件类型检查、覆盖率全量测试和 Trivy 依赖扫描；Dependabot 每周更新 Cargo、npm 和 GitHub Actions 依赖。
 
 ## 4. 演进路线（Milestones）
 
