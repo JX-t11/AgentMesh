@@ -9,6 +9,8 @@ __pycache__/
 *.py[co]
 .pytest_cache/
 .tmp/
+.scratch/
+coverage/
 /agy-model-config.md
 /integrations/
 /docker-compose.e2e.yml

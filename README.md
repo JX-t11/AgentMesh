@@ -203,6 +203,20 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
+### 3.11 代码质量、依赖与镜像扫描
+
+完整命令、基线和服务端设置见 [`.agents/eslint-semgrep-sonarqube.md`](.agents/eslint-semgrep-sonarqube.md)。本地最短路径：
+
+```bash
+npm --prefix web run lint
+npm --prefix web run lint:typed
+bash scripts/semgrep-scan.sh
+bash scripts/trivy-scan.sh deps
+bash scripts/trivy-scan.sh images
+```
+
+CI 在 PR 和 `main` 推送时执行前端 lint/typed/test/build、文档站构建、Rust fmt/clippy/test 和 Trivy 依赖扫描；Dependabot 每周更新 Cargo、npm 和 GitHub Actions 依赖。
+
 ## 4. 演进路线（Milestones）
 
 查看 [变更日志](CHANGELOG.md) 了解已标记版本和验收结果，查看 [版本规划](ROADMAP.md) 了解下一版的范围和验收条件。
