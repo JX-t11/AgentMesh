@@ -436,3 +436,41 @@ fn extract_bearer_or_ws_token<'a>(parts: &'a Parts, ws_paths: &[&str]) -> Option
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn argon2_passwords_verify_against_expected_hash_only() {
+        let (salt, encoded) = hash_password("correct horse");
+        assert!(verify_password("correct horse", &salt, &encoded));
+        assert!(!verify_password("wrong horse", &salt, &encoded));
+    }
+
+    #[test]
+    fn malformed_argon2_hashes_fail_verification() {
+        let (salt, _encoded) = hash_password("hunter2");
+        let invalid_utf8 = {
+            let mut bytes = b"$argon2id$".to_vec();
+            bytes.push(0xff);
+            bytes
+        };
+        assert!(!verify_password("hunter2", &salt, &invalid_utf8));
+        assert!(!verify_password(
+            "hunter2",
+            &salt,
+            b"$argon2id$not-a-phc-string"
+        ));
+    }
+
+    #[test]
+    fn legacy_password_hashes_need_matching_lengths_and_digests() {
+        let salt = [7u8; 32];
+        let digest = derive_password_hash("legacy-pass", &salt);
+        assert!(verify_password("legacy-pass", &salt, &digest));
+        assert!(!verify_password("other-pass", &salt, &digest));
+        assert!(!verify_password("legacy-pass", &salt[..16], &digest));
+        assert!(!verify_password("legacy-pass", &salt, &digest[..16]));
+    }
+}

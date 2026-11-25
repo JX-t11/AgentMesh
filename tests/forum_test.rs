@@ -485,3 +485,97 @@ async fn recv_json(
         }
     }
 }
+
+#[tokio::test]
+async fn duplicate_client_req_id_replays_posts_and_conflicts_on_different_payloads() {
+    let app = TestApp::spawn().await;
+    let (_author_id, author_token) = app
+        .register_agent("forum-idem", "Forum Idem", "openclaw")
+        .await;
+
+    let b_resp = app
+        .client
+        .post(format!("{}/api/v1/admin/boards", app.base_url))
+        .bearer_auth(TEST_ADMIN_TOKEN)
+        .json(&json!({"slug": "idem-board", "name": "Idem Board"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(b_resp.status(), 201);
+    let board_id = Uuid::parse_str(
+        b_resp.json::<Value>().await.unwrap()["board"]["id"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+
+    let create_post = |req_id: &'static str, title: &'static str, content: &'static str| {
+        let app = &app;
+        let author_token = &author_token;
+        async move {
+            let response = app
+                .client
+                .post(format!("{}/api/v1/boards/{board_id}/posts", app.base_url))
+                .bearer_auth(author_token)
+                .json(&json!({
+                    "client_req_id": req_id,
+                    "title": title,
+                    "content": content,
+                }))
+                .send()
+                .await
+                .unwrap();
+            let status = response.status().as_u16();
+            (status, response.json::<Value>().await.unwrap())
+        }
+    };
+
+    let (first_status, first) = create_post("idem-req-1", "RFC draft", "First content").await;
+    assert_eq!(first_status, 201);
+    let post_id = first["post"]["id"].as_str().unwrap().to_owned();
+
+    let (replay_status, replay) = create_post("idem-req-1", "RFC draft", "First content").await;
+    assert_eq!(replay_status, 200);
+    assert_eq!(replay["post"]["id"].as_str().unwrap(), post_id);
+
+    let (conflict_status, conflict) =
+        create_post("idem-req-1", "RFC draft", "Different body").await;
+    assert_eq!(conflict_status, 409);
+    assert_eq!(conflict["error"]["code"], "conflict");
+
+    let create_comment = |req_id: &'static str, content: &'static str| {
+        let app = &app;
+        let author_token = &author_token;
+        let post_path = format!("{}/api/v1/posts/{post_id}/comments", app.base_url);
+        async move {
+            let response = app
+                .client
+                .post(post_path)
+                .bearer_auth(author_token)
+                .json(&json!({"client_req_id": req_id, "content": content}))
+                .send()
+                .await
+                .unwrap();
+            let status = response.status().as_u16();
+            (status, response.json::<Value>().await.unwrap())
+        }
+    };
+
+    let (first_status, first_comment) = create_comment("idem-comment-1", "Looks good").await;
+    assert_eq!(first_status, 201);
+    let comment_id = first_comment["comment"]["id"].as_str().unwrap().to_owned();
+
+    let (replay_status, replay_comment) = create_comment("idem-comment-1", "Looks good").await;
+    assert_eq!(replay_status, 200);
+    assert_eq!(
+        replay_comment["comment"]["id"].as_str().unwrap(),
+        comment_id
+    );
+
+    let (conflict_status, conflict_comment) =
+        create_comment("idem-comment-1", "Changed mind").await;
+    assert_eq!(conflict_status, 409);
+    assert_eq!(conflict_comment["error"]["code"], "conflict");
+
+    app.cleanup().await;
+}

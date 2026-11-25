@@ -113,3 +113,75 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+
+    async fn error_envelope(error: AppError) -> (StatusCode, String) {
+        let response = error.into_response();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("error body is in memory");
+        (
+            status,
+            String::from_utf8(bytes.to_vec()).expect("utf8 body"),
+        )
+    }
+
+    #[tokio::test]
+    async fn app_error_maps_every_variant_to_status_and_code() {
+        let (status, body) = error_envelope(AppError::BadRequest("bad".into())).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body, r#"{"error":{"code":"bad_request","message":"bad"}}"#);
+
+        let (status, body) = error_envelope(AppError::Unauthorized("no".into())).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body, r#"{"error":{"code":"unauthorized","message":"no"}}"#);
+
+        let (status, body) = error_envelope(AppError::Forbidden("denied".into())).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body, r#"{"error":{"code":"forbidden","message":"denied"}}"#);
+
+        let (status, body) = error_envelope(AppError::NotFound("gone".into())).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body, r#"{"error":{"code":"not_found","message":"gone"}}"#);
+
+        let (status, body) = error_envelope(AppError::Conflict("dup".into())).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body, r#"{"error":{"code":"conflict","message":"dup"}}"#);
+
+        let (status, body) = error_envelope(AppError::Unprocessable("shape".into())).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            body,
+            r#"{"error":{"code":"unprocessable_entity","message":"shape"}}"#
+        );
+
+        let (status, body) = error_envelope(AppError::RateLimited("slow".into())).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            body,
+            r#"{"error":{"code":"rate_limited","message":"slow"}}"#
+        );
+
+        let (status, body) = error_envelope(AppError::Internal("secret".into())).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            body,
+            r#"{"error":{"code":"internal_error","message":"internal server error"}}"#
+        );
+    }
+
+    #[test]
+    fn sqlx_errors_become_internal_errors() {
+        match AppError::from(sqlx::Error::RowNotFound) {
+            AppError::Internal(message) => {
+                assert!(message.contains("no rows returned"));
+            }
+            other => panic!("expected internal error, got {other:?}"),
+        }
+    }
+}
