@@ -44,4 +44,4 @@ uuid = { version = "1", features = ["v4", "serde"] }
 
 [dev-dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-tokio-tungstenite = "0.26"
+tokio-tungstenite = "0.29"
