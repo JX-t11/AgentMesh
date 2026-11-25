@@ -141,7 +141,19 @@ curl -s -u "<token>:" "http://192.168.1.234:9000/api/issues/search?componentKeys
 | 评级 | 可靠性 A / 安全 A / 可维护性 A,重复率 1.5%,安全热点 0 |
 | 质量门 | ERROR:新代码覆盖率 0.0%(门槛 80%);新增违规与重复率条件通过 |
 
-历史首扫的 TS/Docker/`secrets:S6698` 命中已由 `1dbddcb` 清理;4 个 Rust 认知复杂度 hotspots 已由 `d57d46b` 拆分消除。质量门唯一失败项是覆盖率。仓库尚未生成并上传 LCOV,这里不伪造覆盖率报告;补齐 `web` 覆盖率后再复扫,才能判断新代码 80% 门槛是否真实可达。
+历史首扫的 TS/Docker/`secrets:S6698` 命中已由 `1dbddcb` 清理;4 个 Rust 认知复杂度 hotspots 已由 `d57d46b` 拆分消除。
+
+### 2026-11-26 覆盖率接入后基线
+
+`scripts/coverage.sh` 生成四份报告(Rust LCOV、web LCOV、OpenClaw LCOV、Hermes Cobertura),`sonar-project.properties` 按 `sonar.sources`/`sonar.tests` 分离产品代码与测试并导入报告;扫描前守卫会校验四份报告齐全。
+
+| 指标 | 值 |
+|---|---|
+| 质量门 | **OK**:`new_coverage=80.2%`(门槛 80%)、新增违规 0、新增重复率 0.23% |
+| 整体覆盖率 | 84.5%(Rust 行覆盖 90.36%、web 85.72%、OpenClaw 85.98%、Hermes 79%) |
+| 评级 | 可靠性/安全/可维护性均为 A,整体重复率 0.3% |
+
+新代码余量约 0.2 个百分点(≈十几行):后续改 `src/routes/ws.rs`、`src/routes/groups.rs`、`src/routes/forum.rs` 这类仍有百行级未覆盖路径的文件时,应连同测试一起提交再扫描,否则质量门会翻回 ERROR。
 
 ### 工具分工与频率
 
@@ -246,3 +258,14 @@ E2E 不放进 CI:它需要模型凭据、Docker 网络和真实 Agent 运行时,
 | Rust 复杂度拆分 | `cargo fmt --all --check` + clippy + `cargo test` | 退出码均 0;`high_concurrency_test` 拆分后仍 1/1 通过 |
 | SonarQube 复杂度复扫 | `SONAR_TOKEN=… bash scripts/sonar-scan.sh` | 退出码 0,对应 `d57d46b`;开放 issue 0,Code Smell 0,新增违规 0 |
 | Semgrep 复杂度改造复扫 | `bash scripts/semgrep-scan.sh` | 退出码 0,1034 个跟踪文件,295 条规则,0 命中 |
+
+### 2026-11-26 覆盖率接入验证
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 四语言覆盖率 | `bash scripts/coverage.sh` | 退出码 0;Rust 行覆盖 90.36%(5373/5946)、web 85.72%、OpenClaw 85.98%、Hermes 79% |
+| 覆盖率补测 | `cargo fmt --all --check` + clippy + `cargo test` | 退出码均 0;新增 DM 生命周期 7 用例、错误映射、密码回退、`client_req_id` 重放/冲突、config/state 单测 |
+| Hermes 漏洞修复复测 | `python3 -m coverage run -m unittest discover …` | 6/6 通过;`/tmp` 公共路径告警改用 mock cursor store 消除 |
+| Semgrep 覆盖率改造复扫 | `bash scripts/semgrep-scan.sh` | 退出码 0,1037 个跟踪文件,295 条规则,0 命中 |
+| SonarQube 质量门复扫 | `SONAR_TOKEN=… bash scripts/sonar-scan.sh` | 退出码 0,对应 `f2b65ad`;质量门 **OK**:新代码覆盖率 80.2%、新增违规 0、新增重复率 0.23% |
+| Sonar 整体指标 | `GET /api/measures/component` | 整体覆盖率 84.5%,可靠性/安全/可维护性均为 A,整体重复率 0.3% |
