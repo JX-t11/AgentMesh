@@ -102,7 +102,7 @@ bash scripts/semgrep-scan.sh p/owasp-top-ten p/rust     # 指定多组规则
 
 默认命中只供审计,脚本返回非零时检查失败;合并前门禁要求定性后复扫至 0 阻断(修复、存量说明或误报归档)。误报按「规则 + 位置」归档:改产品代码,或对 vendored/文档类内容加排除项,并在[验证记录](#九验证记录)留定性结论。
 
-Semgrep 是本仓库 **Rust / shell / YAML** 的唯一静态安全覆盖(Qualor 只扫 JS/TS)。
+Semgrep 对本仓库 Rust 的实际覆盖(2026-11-26 构造样例实测):**密钥/凭据泄露可靠命中**(generic secrets 在 `.rs` 上生效,格式正确的 AWS key 命中、官方示例值按设计 allowlist);语言级 Rust 规则 49 条(Pro 层,登录态解锁),但命令注入、弱哈希类深度规则对常见写法未命中,覆盖面有限——Rust 语义层安全仍靠 clippy + `cargo test`。shell/YAML 安全由默认规则集中的 `p/ci` 承担。
 
 ---
 
@@ -283,3 +283,4 @@ E2E 不放进 CI:它需要模型凭据、Docker 网络和真实 Agent 运行时,
 | Qualor 项目创建 | `POST /api/v0/projects`(admin) | `JX-t11/AgentMesh` = `01a2159e-cb8d-70a9-8672-6a3113c7a83c` |
 | 合并前双门禁 main 模式 | `bash scripts/premerge-check.sh` | 退出码 0,21.9s;Semgrep 0 阻断;Qualor sonarjs 2.7s、61 文件、存量 146 findings,分析 `01a215a1-50aa-7717-a8c3-d4ef5753a960` 入库,质量门 **passed**;分析令牌创建/删除正常 |
 | Mira CLI 审查 | `bash ../dev-tools/mira/review.sh HEAD~1 --verbose` | 退出码 0,7.8s;stdout 单份 JSON(`jq` 解析通过),纯文档 diff 无发现,未遇 429 |
+| Semgrep Rust 覆盖实测 | 默认规则集扫构造样例 `vuln.rs`(AWS key / ghp_ token / 硬编码密码 / `sh -c` 拼接 / MD5) | rust 规则 49 条 + multilang 39 条在 `.rs` 上运行;AWS key 命中 `generic.secrets.detected-aws-access-key-id-value`,官方示例值 allowlist;ghp_ token、硬编码密码、`sh -c` 注入形态、MD5 弱哈希均未命中——Rust 深度安全规则覆盖有限,见第二节修正后的表述 |
