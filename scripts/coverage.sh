@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 生成 Sonar 覆盖率报告(Rust LCOV、web/OpenClaw JS LCOV、Hermes Python Cobertura)。
+# 生成覆盖率报告(Rust LCOV、web/OpenClaw JS LCOV、Hermes Python Cobertura),CI 上传为 artifact。
 # 前置: cargo-llvm-cov 0.6.21、llvm-tools-preview、@vitest/coverage-v8、Python coverage。
 # 用法: bash scripts/coverage.sh
 set -euo pipefail
@@ -19,7 +19,7 @@ cd "$ROOT"
 echo '[coverage] Rust integration tests'
 rustup component add llvm-tools-preview
 cargo llvm-cov --workspace --all-targets --lcov --output-path target/agentmesh.lcov
-# cargo-llvm-cov 写入绝对路径；Sonar scanner 挂载后需要仓库相对路径。
+# cargo-llvm-cov 写入绝对路径；改写为仓库相对路径，产物在 CI 与本地都可读。
 sed -i "s|^SF:${ROOT}/|SF:|" target/agentmesh.lcov
 
 echo '[coverage] Observer web tests'

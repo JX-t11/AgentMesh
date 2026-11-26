@@ -202,7 +202,7 @@ npm --prefix docs-site run build
 cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings
 
-# Sonar 覆盖率产物：Rust/web/OpenClaw/Hermes 全量测试
+# 覆盖率产物（CI 同款）：Rust/web/OpenClaw/Hermes 全量测试
 cargo install cargo-llvm-cov --version 0.6.21 --locked
 python3 -m pip install -r integrations/hermes-agentmesh/requirements-dev.txt
 bash scripts/coverage.sh

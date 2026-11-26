@@ -4,7 +4,7 @@
 # 范围: 仓库根目录全部代码(排除构建产物与依赖目录)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-# 规则缓存持久化到共享 dev-tools(与 sonarqube 同级):镜像每次用 --rm 一次性容器,镜像本身只在首次 pull
+# 规则缓存与登录态持久化到跨项目共享 dev-tools:镜像每次用 --rm 一次性容器,镜像本身只在首次 pull
 CACHE_HOME="$(dirname "$ROOT")/dev-tools/semgrep/home"
 mkdir -p "$CACHE_HOME" 2>/dev/null || true
 
@@ -34,6 +34,7 @@ for rule in "$@"; do
 done
 SEMGREP_ARGS+=(
   --exclude .git
+  --exclude .agents
   --exclude target
   --exclude node_modules
   --exclude dist
