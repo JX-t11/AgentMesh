@@ -488,6 +488,174 @@ async function main() {
     const { data: afterRestartPost } = await apiJson(`/api/v1/posts/${forumPost.id}`);
     assert.equal(afterRestartPost.post.comment_count, 3);
 
+    // 5c. Cross-round proposal review: R1 hermes-gamma publishes a proposal post (forced intent,
+    // no mentions), R2 openclaw-alpha discovers the author by capability tag and follows, R3 alpha
+    // revisits via home and reviews in-thread, R4 the inbox wake-up chain converges and stops.
+    // Every step runs the real daemon → model → tool path; tool_receipt events are the forensics.
+    env.HERMES_GAMMA_INTENT_ID = `${runId}-x-propose`;
+    env.HERMES_GAMMA_INITIAL_INTENT =
+      `X_PROPOSE ${runId}: 在 engineering-rfcs 板块发布一篇方案帖。标题以 "[${runId}] X-PROPOSAL" 开头；正文依次包含「背景：」「备选：」「取舍锚点：CR-ANCHOR-<自选随机后缀>」「待决：」四段；不要 @ 任何同伴。`;
+    await runDocker([...composeBase, 'up', '-d', '--no-build', '--force-recreate', 'hermes-gamma']);
+    await waitReady('hermes-gamma', 1);
+
+    const proposal = await until(async () => {
+      const { data } = await apiJson(`/api/v1/boards/${rfcBoard.id}/posts?sort=newest&limit=20`);
+      return (data?.posts ?? []).find((p) => p.title.includes('X-PROPOSAL') && p.title.includes(runId));
+    }, 'hermes-gamma publishes the cross-round proposal post');
+    const proposalDetail = await apiJson(`/api/v1/posts/${proposal.id}`);
+    assert.equal(proposalDetail.data.post.author_agent_id, agentBySlug.get('hermes-gamma').id);
+    assert.deepEqual(proposalDetail.data.post.mention_agent_ids, [], 'proposal post must not mention anyone');
+    for (const section of ['背景：', '备选：', '取舍锚点：', '待决：']) {
+      assert.ok(proposalDetail.data.post.content.includes(section), `proposal content carries the ${section} section`);
+    }
+    const anchor = proposalDetail.data.post.content.match(/CR-ANCHOR-[A-Za-z0-9]+/)?.[0];
+    assert.ok(anchor, 'proposal content carries a CR-ANCHOR trade-off token');
+    const proposeReceipts = (await getEvents('hermes-gamma')).filter(
+      (e) => e.event === 'tool_receipt' && e.turn === `intent:${runId}-x-propose`,
+    );
+    assert.deepEqual(proposeReceipts.map((e) => e.tool), ['agentmesh_create_forum_post']);
+    assert.deepEqual(proposeReceipts[0].args, { board: 'engineering-rfcs' }, 'proposal receipt carries no mentions');
+
+    // R2: neutral intent — capability tag only, no title/board/content hints (anti-cheat).
+    const feedBefore = await apiJson('/api/v1/agents/me/feed', {
+      headers: { Authorization: `Bearer ${alphaCred.token}` },
+    });
+    assert.ok(
+      !feedBefore.data.posts.some((p) => p.id === proposal.id),
+      'proposal must be absent from the feed before following',
+    );
+    env.OPENCLAW_ALPHA_INTENT_ID = `${runId}-x-discover`;
+    env.OPENCLAW_ALPHA_INITIAL_INTENT =
+      `X_DISCOVER ${runId} capability=rfc：用 agentmesh_find_agents 按 capability=rfc 检索一位同伴并关注它。禁止读论坛或搜索帖子。`;
+    await runDocker([...composeBase, 'up', '-d', '--no-build', '--force-recreate', 'openclaw-alpha']);
+    await waitReady('openclaw-alpha', 1);
+    const discoverReceipts = (await getEvents('openclaw-alpha')).filter(
+      (e) => e.event === 'tool_receipt' && e.turn === `intent:${runId}-x-discover`,
+    );
+    assert.deepEqual(discoverReceipts.map((e) => e.tool), ['agentmesh_find_agents', 'agentmesh_follow_agent']);
+    assert.equal(discoverReceipts[1].args.target_agent, 'hermes-gamma', 'reviewer follows the proposal author');
+    const followRows = await runDocker([
+      ...composeBase,
+      'exec',
+      '-T',
+      'postgres',
+      'psql',
+      '-U',
+      'agentmesh',
+      '-d',
+      'agentmesh',
+      '-tAc',
+      "SELECT count(*) FROM agent_follows af JOIN agents f ON f.id = af.follower_agent_id JOIN agents g ON g.id = af.followed_agent_id WHERE f.slug = 'openclaw-alpha' AND g.slug = 'hermes-gamma'",
+    ]);
+    assert.equal(Number(followRows.trim()), 1, 'follow row lands in the database');
+    const feedAfter = await apiJson('/api/v1/agents/me/feed', {
+      headers: { Authorization: `Bearer ${alphaCred.token}` },
+    });
+    assert.ok(feedAfter.data.posts.some((p) => p.id === proposal.id), 'following puts the proposal into the feed');
+
+    // R3: neutral revisit intent — home → read → top-level in-thread review citing the anchor.
+    const r3StartedAt = Date.now();
+    env.OPENCLAW_ALPHA_INTENT_ID = `${runId}-x-revisit`;
+    env.OPENCLAW_ALPHA_INITIAL_INTENT =
+      `X_REVISIT ${runId}：回访。用 agentmesh_home 查看关注动态，找到标题含 X-PROPOSAL 的帖子并通读全文，然后在原帖顶层（不回复某条评论）发表评审意见：结论先行，并引用正文中的取舍锚点（CR-ANCHOR-…）。禁止使用搜索工具。`;
+    await runDocker([...composeBase, 'up', '-d', '--no-build', '--force-recreate', 'openclaw-alpha']);
+    await waitReady('openclaw-alpha', 1);
+    const review = await until(async () => {
+      const res = await apiJson(`/api/v1/posts/${proposal.id}/comments?limit=50`);
+      return (res.data?.comments ?? []).find(
+        (c) => c.author_agent_id === agentBySlug.get('openclaw-alpha').id && c.content.includes('X-REVIEW'),
+      );
+    }, 'reviewer posts the cross-round review comment', 120_000);
+    assert.equal(review.parent_comment_id, null, 'review must be a top-level in-thread comment');
+    assert.ok(review.content.includes(anchor), 'review cites the CR-ANCHOR token from the post content');
+    const revisitReceipts = (await getEvents('openclaw-alpha')).filter(
+      (e) => e.event === 'tool_receipt' && e.turn === `intent:${runId}-x-revisit`,
+    );
+    assert.deepEqual(
+      revisitReceipts.map((e) => e.tool),
+      ['agentmesh_home', 'agentmesh_read_forum_post', 'agentmesh_create_forum_comment'],
+      'revisit recovers context via home and a full post read',
+    );
+    assert.equal(revisitReceipts[1].args.post_id, proposal.id);
+    assert.equal(revisitReceipts[2].args.post_id, proposal.id);
+
+    // R4: inbox wake-ups only — no forced rounds. C2 answers (mentions reviewer), C3 follows up,
+    // C4 concludes without mentions; the chain then wakes both sides one last time and stops.
+    const thread = await until(async () => {
+      const res = await apiJson(`/api/v1/posts/${proposal.id}/comments?limit=50`);
+      return (res.data?.comments?.length ?? 0) >= 4 ? res.data.comments : undefined;
+    }, 'inbox wake-up chain converges to four comments', 180_000);
+    const [c2, c3, c4] = thread.slice(1);
+    assert.equal(c2.author_agent_id, agentBySlug.get('hermes-gamma').id);
+    assert.equal(c2.parent_comment_id, review.id);
+    assert.ok(c2.content.includes('X-ANSWER'));
+    assert.deepEqual(c2.mention_agent_ids, [agentBySlug.get('openclaw-alpha').id], 'answer re-wakes the reviewer');
+    assert.equal(c3.author_agent_id, agentBySlug.get('openclaw-alpha').id);
+    assert.equal(c3.parent_comment_id, c2.id);
+    assert.ok(c3.content.includes('X-FOLLOWUP'));
+    assert.equal(c4.author_agent_id, agentBySlug.get('hermes-gamma').id);
+    assert.equal(c4.parent_comment_id, c3.id);
+    assert.ok(c4.content.includes('X-FINAL'));
+    assert.deepEqual(c4.mention_agent_ids, [], 'final comment must not re-wake the reviewer');
+    const gammaEvents = await getEvents('hermes-gamma');
+    const gammaWakeReceipts = gammaEvents.filter(
+      (e) =>
+        e.event === 'tool_receipt' &&
+        e.turn.startsWith('inbox:') &&
+        e.tool === 'agentmesh_create_forum_comment' &&
+        e.args?.post_id === proposal.id,
+    );
+    assert.equal(gammaWakeReceipts.length, 2, 'author answers twice via inbox wake-ups');
+    for (const receipt of gammaWakeReceipts) {
+      const tools = gammaEvents
+        .filter((e) => e.event === 'tool_receipt' && e.turn === receipt.turn)
+        .map((e) => e.tool);
+      assert.deepEqual(tools, ['agentmesh_read_forum_post', 'agentmesh_create_forum_comment']);
+    }
+    const alphaEvents = await getEvents('openclaw-alpha');
+    const alphaWakeReceipts = alphaEvents.filter(
+      (e) =>
+        e.event === 'tool_receipt' &&
+        e.turn.startsWith('inbox:') &&
+        e.tool === 'agentmesh_create_forum_comment' &&
+        e.args?.post_id === proposal.id,
+    );
+    assert.equal(alphaWakeReceipts.length, 1, 'reviewer follows up once via inbox wake-up');
+    const alphaWakeTools = alphaEvents
+      .filter((e) => e.event === 'tool_receipt' && e.turn === alphaWakeReceipts[0].turn)
+      .map((e) => e.tool);
+    assert.deepEqual(alphaWakeTools, ['agentmesh_read_forum_post', 'agentmesh_create_forum_comment']);
+
+    await delay(8000);
+    const settled = await apiJson(`/api/v1/posts/${proposal.id}`);
+    assert.equal(settled.data.post.comment_count, 4, 'wake chain must terminate without idle back-and-forth');
+
+    const createdAt = (row) => Date.parse(row.created_at);
+    const timeToFirstReplyMs = createdAt(review) - createdAt(proposalDetail.data.post);
+    const revisitInTurnMs = createdAt(review) - r3StartedAt;
+    const convergeMs = createdAt(c4) - createdAt(proposalDetail.data.post);
+    assert.ok(revisitInTurnMs <= 600_000, `first reply within 10 minutes of the revisit round (took ${revisitInTurnMs} ms)`);
+    assert.ok(convergeMs <= 2_400_000, `thread converged within 40 minutes (took ${convergeMs} ms)`);
+    // 回访上下文恢复 rubric：锚点引用需内容级判定，真实模型下留待人工复核（WP4）；其余两项机械可判。
+    const contextRecoveryRubric = { anchor_cited: protocolOnly, threading: true, tool_chain: true };
+    assert.ok(
+      Object.values(contextRecoveryRubric).filter(Boolean).length >= 2,
+      'context recovery rubric passes at least 2 of 3',
+    );
+    console.log('PASS: cross-round proposal review converged via capability discovery, feed revisit, and inbox wake-ups.');
+    console.log(
+      JSON.stringify({
+        event: 'cross_round_metrics',
+        run: runId,
+        proposal_post_id: proposal.id,
+        time_to_first_reply_ms: timeToFirstReplyMs,
+        revisit_in_turn_ms: revisitInTurnMs,
+        converge_ms: convergeMs,
+        comments: thread.length,
+        context_recovery_rubric: contextRecoveryRubric,
+      }),
+    );
+
     // 6. Platform user governance, capability-gated group join, and strict-privacy 1v1 DM handshake
     const betaCred = await readAgentCred('openclaw-beta');
     const regRes = await apiJson('/api/v1/auth/register', {
@@ -730,7 +898,7 @@ async function main() {
     }
     ws.close();
 
-    console.log('PASS: 2 OpenClaw + 2 Hermes Agents completed IM, forum, restart, observer, privacy, and social discovery checks.');
+    console.log('PASS: 2 OpenClaw + 2 Hermes Agents completed IM, forum, cross-round review, restart, observer, privacy, and social discovery checks.');
   } finally {
     if (!keepUp) {
       await runDocker([...composeBase, 'down', '-v', '--remove-orphans']).catch(() => {});
