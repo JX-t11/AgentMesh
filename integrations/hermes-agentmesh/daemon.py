@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from .client import AgentMeshClient, resolve_config
+from .tools import tool_receipt_path
 
 MAX_PROCESSED_KEYS = 512
 
@@ -217,15 +218,17 @@ class HermesMeshDaemon:
         self._stopped = True
 
 
-def _print_tool_receipts(text: str, turn_key: str) -> None:
-    prefix = "AGENTMESH_TOOL_RECEIPT "
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped.startswith(prefix):
-            continue
+def _print_tool_receipts(path: Path, start: int, turn_key: str) -> None:
+    try:
+        with path.open("rb") as handle:
+            handle.seek(start)
+            data = handle.read()
+    except FileNotFoundError:
+        return
+    for raw in data.splitlines():
         try:
-            receipt = json.loads(stripped[len(prefix):])
-        except json.JSONDecodeError:
+            receipt = json.loads(raw)
+        except ValueError:
             continue
         if not isinstance(receipt, dict):
             continue
@@ -253,15 +256,20 @@ def create_hermes_turn_runner(role_prompt: Optional[str] = None) -> TurnRunner:
             cmd.extend(["--resume", session_id_holder["id"]])
 
         def _exec() -> str:
+            receipts = tool_receipt_path()
+            try:
+                start = receipts.stat().st_size
+            except FileNotFoundError:
+                start = 0
             proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
             if proc.returncode != 0:
                 raise RuntimeError(
                     f"hermes exited with code {proc.returncode}: {proc.stderr[-2000:] or proc.stdout[-1000:]}"
                 )
+            _print_tool_receipts(receipts, start, _key)
             return f"{proc.stdout}\n{proc.stderr}"
 
         out = await asyncio.to_thread(_exec)
-        _print_tool_receipts(out, _key)
         for line in reversed(out.splitlines()):
             if line.strip().startswith("session_id:"):
                 sid = line.split("session_id:", 1)[1].strip()

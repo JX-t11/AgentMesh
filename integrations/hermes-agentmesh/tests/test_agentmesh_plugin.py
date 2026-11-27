@@ -16,6 +16,8 @@ from unittest import mock
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+# 回执文件默认写在 HOME 下；测试进程统一指向临时目录，避免污染真实 HOME。
+os.environ["AGENTMESH_TOOL_RECEIPT_FILE"] = str(Path(tempfile.mkdtemp()) / "tool-receipts.jsonl")
 
 
 def _load_plugin_package():
@@ -715,78 +717,76 @@ class HermesPluginTest(unittest.TestCase):
 
 
 class ToolReceiptTest(unittest.TestCase):
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name)
+        self.receipt_file = self.tmp / "tool-receipts.jsonl"
+        env = mock.patch.dict(os.environ, {"AGENTMESH_TOOL_RECEIPT_FILE": str(self.receipt_file)})
+        env.start()
+        self.addCleanup(env.stop)
+
     def _handler(self, name):
         for tool_name, _schema, handler, _emoji in plugin_tools.TOOL_SPECS:
             if tool_name == name:
                 return handler
         raise AssertionError(f"missing tool {name}")
 
-    def test_wrapped_handler_emits_ok_receipt_with_whitelisted_args(self) -> None:
-        class FakeClient:
-            def follow_agent(self, target_agent, following):
-                return {"following": following, "target_agent": target_agent}
-
-        handler = self._handler("agentmesh_follow_agent")
+    def _call(self, name, client, args):
+        handler = self._handler(name)
         original_client = plugin_tools._get_client
-        plugin_tools._get_client = lambda: FakeClient()
+        plugin_tools._get_client = lambda: client
         try:
-            buf = io.StringIO()
-            with contextlib.redirect_stderr(buf):
-                result = json.loads(handler({"target_agent": "alpha", "following": True}))
-            self.assertTrue(result["following"])
+            return json.loads(handler(args))
         finally:
             plugin_tools._get_client = original_client
 
-        lines = [l for l in buf.getvalue().splitlines() if l.startswith(plugin_tools.RECEIPT_PREFIX)]
-        self.assertEqual(len(lines), 1)
-        receipt = json.loads(lines[0][len(plugin_tools.RECEIPT_PREFIX):])
-        self.assertEqual(receipt["tool"], "agentmesh_follow_agent")
-        self.assertTrue(receipt["ok"])
-        self.assertIsInstance(receipt["duration_ms"], int)
-        self.assertEqual(receipt["args"], {"target_agent": "alpha"})
+    def _receipts(self):
+        if not self.receipt_file.exists():
+            return []
+        return [json.loads(line) for line in self.receipt_file.read_text(encoding="utf-8").splitlines()]
 
-    def test_failed_handler_emits_ok_false_receipt_without_error_content(self) -> None:
-        class FakeClient:
-            def search_posts(self, **_kwargs):
-                raise ValueError("secret backend failure")
-
-        handler = self._handler("agentmesh_search_posts")
-        original_client = plugin_tools._get_client
-        plugin_tools._get_client = lambda: FakeClient()
-        try:
-            buf = io.StringIO()
-            with contextlib.redirect_stderr(buf):
-                result = json.loads(handler({"q": "mesh"}))
-        finally:
-            plugin_tools._get_client = original_client
-
-        self.assertIn("error", result)
-        lines = [l for l in buf.getvalue().splitlines() if l.startswith(plugin_tools.RECEIPT_PREFIX)]
-        self.assertEqual(len(lines), 1)
-        receipt = json.loads(lines[0][len(plugin_tools.RECEIPT_PREFIX):])
-        self.assertEqual(receipt["tool"], "agentmesh_search_posts")
-        self.assertFalse(receipt["ok"])
-        self.assertEqual(receipt["args"], {"q": "mesh"})
-        self.assertNotIn("secret", lines[0])
-
-    def test_turn_runner_prints_structured_receipt_events(self) -> None:
-        fake_bin = Path(tempfile.mkdtemp()) / "hermes-fake"
+    def _write_fake_hermes(self) -> Path:
+        # 与真实 CLI 相同：工具调用在另一处执行，其 stderr 写往 gateway 日志，
+        # 而不是守护进程从这个子进程捕获的 stdio。
+        pkg_dir = Path(__file__).resolve().parent.parent
+        init_py = pkg_dir / "__init__.py"
+        gateway_log = self.tmp / "gateway-stdio.log"
+        fake_bin = self.tmp / "hermes-fake"
         fake_bin.write_text(
-            "#!/bin/sh\n"
-            "echo 'noise line'\n"
-            "echo 'AGENTMESH_TOOL_RECEIPT {\"tool\":\"agentmesh_search_posts\",\"ok\":true,"
-            "\"duration_ms\":12,\"args\":{\"q\":\"mesh\"}}'\n"
-            "echo 'AGENTMESH_TOOL_RECEIPT not-json'\n"
-            "exit 0\n",
+            f"""#!{sys.executable}
+import contextlib, importlib.util, sys
+from pathlib import Path
+
+spec = importlib.util.spec_from_file_location(
+    "hermes_agentmesh_pkg", r"{init_py}", submodule_search_locations=[r"{pkg_dir}"]
+)
+pkg = importlib.util.module_from_spec(spec)
+sys.modules["hermes_agentmesh_pkg"] = pkg
+spec.loader.exec_module(pkg)
+
+
+class FakeClient:
+    def search_posts(self, **_kwargs):
+        return {{"posts": []}}
+
+
+pkg.tools._get_client = lambda: FakeClient()
+handler = next(h for name, _schema, h, _emoji in pkg.tools.TOOL_SPECS if name == "agentmesh_search_posts")
+with open(r"{gateway_log}", "a", encoding="utf-8") as gateway_stdio, contextlib.redirect_stderr(gateway_stdio):
+    print(handler({{"q": "mesh", "limit": 1}}))
+print("session_id: local-test")
+""",
             encoding="utf-8",
         )
         fake_bin.chmod(0o755)
+        return fake_bin
 
+    def _run_turn(self, fake_bin: Path, turn_key: str):
         buf = io.StringIO()
         with mock.patch.dict(os.environ, {"HERMES_BIN": str(fake_bin)}), contextlib.redirect_stdout(buf):
             runner = plugin_daemon.create_hermes_turn_runner()
-            asyncio.run(runner("inbox", "inbox:9", "Do the work"))
-
+            asyncio.run(runner("inbox", turn_key, "Do the work"))
         events = []
         for line in buf.getvalue().splitlines():
             try:
@@ -795,19 +795,63 @@ class ToolReceiptTest(unittest.TestCase):
                 continue
             if isinstance(event, dict) and event.get("event") == "tool_receipt":
                 events.append(event)
+        return events
+
+    def test_wrapped_handler_appends_ok_receipt_with_whitelisted_args(self) -> None:
+        class FakeClient:
+            def follow_agent(self, target_agent, following):
+                return {"following": following, "target_agent": target_agent}
+
+        result = self._call("agentmesh_follow_agent", FakeClient(), {"target_agent": "alpha", "following": True})
+        self.assertTrue(result["following"])
+
+        receipts = self._receipts()
+        self.assertEqual(len(receipts), 1)
+        self.assertEqual(receipts[0]["tool"], "agentmesh_follow_agent")
+        self.assertTrue(receipts[0]["ok"])
+        self.assertIsInstance(receipts[0]["duration_ms"], int)
+        self.assertEqual(receipts[0]["args"], {"target_agent": "alpha"})
+
+    def test_failed_handler_appends_ok_false_receipt_without_error_content(self) -> None:
+        class FakeClient:
+            def search_posts(self, **_kwargs):
+                raise ValueError("secret backend failure")
+
+        result = self._call("agentmesh_search_posts", FakeClient(), {"q": "mesh"})
+        self.assertIn("error", result)
+
+        receipts = self._receipts()
+        self.assertEqual(len(receipts), 1)
+        self.assertEqual(receipts[0]["tool"], "agentmesh_search_posts")
+        self.assertFalse(receipts[0]["ok"])
+        self.assertEqual(receipts[0]["args"], {"q": "mesh"})
+        self.assertNotIn("secret", self.receipt_file.read_text(encoding="utf-8"))
+
+    def test_turn_runner_forwards_receipt_written_outside_the_child_stdio(self) -> None:
+        events = self._run_turn(self._write_fake_hermes(), "inbox:9")
+
+        self.assertEqual(len(events), 1)
+        receipt = events[0]
+        self.assertIsInstance(receipt.pop("duration_ms"), int)
         self.assertEqual(
-            events,
-            [
-                {
-                    "event": "tool_receipt",
-                    "turn": "inbox:9",
-                    "tool": "agentmesh_search_posts",
-                    "ok": True,
-                    "duration_ms": 12,
-                    "args": {"q": "mesh"},
-                }
-            ],
+            receipt,
+            {
+                "event": "tool_receipt",
+                "turn": "inbox:9",
+                "tool": "agentmesh_search_posts",
+                "ok": True,
+                "args": {"q": "mesh"},
+            },
         )
+
+    def test_turn_runner_ignores_receipts_from_earlier_turns(self) -> None:
+        self.receipt_file.write_text(
+            json.dumps({"tool": "agentmesh_feed", "ok": True, "duration_ms": 1}) + "\n", encoding="utf-8"
+        )
+
+        events = self._run_turn(self._write_fake_hermes(), "inbox:10")
+
+        self.assertEqual([event["tool"] for event in events], ["agentmesh_search_posts"])
 
 
 if __name__ == "__main__":

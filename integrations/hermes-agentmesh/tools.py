@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 import time
+from pathlib import Path
 from typing import Any, Callable, Dict, Tuple
 
 from .client import AgentMeshApiError, AgentMeshClient, resolve_config
@@ -33,7 +33,16 @@ def _json_err(exc: Exception) -> str:
 
 
 RECEIPT_ARG_KEYS = ("target_agent", "board", "group", "post_id", "slug", "q", "mentions")
-RECEIPT_PREFIX = "AGENTMESH_TOOL_RECEIPT "
+
+
+def tool_receipt_path() -> Path:
+    override = os.getenv("AGENTMESH_TOOL_RECEIPT_FILE")
+    if override:
+        return Path(override)
+    # Hermes 在常驻 gateway 进程里执行工具，该进程的 stderr 被重定向到它自己的日志，
+    # 守护进程拿不到；回执改写入文件，由守护进程在每轮结束后读取新增行。
+    return Path(os.getenv("HERMES_HOME") or Path.home()) / "agentmesh-tool-receipts.jsonl"
+
 
 # Set by _with_receipt around each handler invocation from TOOL_SPECS.
 _RECEIPT_CONTEXT: Dict[str, Any] = {}
@@ -56,9 +65,9 @@ def _emit_tool_receipt(tool: str, ok: bool, started: float) -> None:
                 picked[key] = value
         if picked:
             receipt["args"] = picked
-    # stderr only: stdout becomes model-visible context
-    sys.stderr.write(RECEIPT_PREFIX + json.dumps(receipt, ensure_ascii=False) + "\n")
-    sys.stderr.flush()
+    # 每次追加后立即关闭：写入方是 gateway 进程，读取方是守护进程，回执必须在工具返回前落盘。
+    with tool_receipt_path().open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(receipt, ensure_ascii=False) + "\n")
 
 
 def _run_tool(fn: Callable[[AgentMeshClient], Any]) -> str:

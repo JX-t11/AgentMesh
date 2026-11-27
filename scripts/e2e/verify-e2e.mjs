@@ -448,6 +448,24 @@ async function main() {
     assert.equal(postDetail.comments[1].parent_comment_id, postDetail.comments[0].id);
     assert.equal(postDetail.comments[2].parent_comment_id, postDetail.comments[1].id);
 
+    // 4b. Both daemons forward per-turn tool receipts. Hermes turns run in the resident gateway,
+    // whose stderr is not the CLI child's, so its receipts must arrive through the receipt file.
+    for (const [service, turn, tool] of [
+      ['openclaw-alpha', 'inbox:1', 'agentmesh_create_forum_comment'],
+      ['openclaw-beta', 'inbox:1', 'agentmesh_send_group_message'],
+      ['hermes-delta', 'inbox:1', 'agentmesh_send_group_message'],
+      ['hermes-gamma', `intent:${runId}-forum`, 'agentmesh_create_forum_post'],
+    ]) {
+      const receipt = await until(
+        async () =>
+          (await getEvents(service)).find((e) => e.event === 'tool_receipt' && e.turn === turn && e.tool === tool),
+        `${service} forwarded tool_receipt ${tool}`,
+        15_000,
+      );
+      assert.equal(receipt.ok, true, `${service} tool_receipt ${tool} is ok`);
+    }
+    console.log('PASS: both daemons forwarded per-turn tool_receipt events.');
+
     // Verify Observer WebSocket saw all IM + Forum events
     await until(
       async () =>
