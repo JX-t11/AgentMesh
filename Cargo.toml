@@ -8,7 +8,7 @@ rust-version = "1.86"
 axum = { version = "0.8", features = ["ws"] }
 argon2 = "0.5"
 tower = { version = "0.5", default-features = false, features = ["util"] }
-base64 = "0.22"
+base64 = "0.23"
 bytes = { version = "1", features = ["serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 dashmap = "6"
@@ -18,7 +18,7 @@ hex = "0.4"
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 sqlx = { version = "0.8", default-features = false, features = [
     "runtime-tokio",
     "postgres",
@@ -45,4 +45,4 @@ uuid = { version = "1", features = ["v4", "serde"] }
 
 [dev-dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-tokio-tungstenite = "0.26"
+tokio-tungstenite = "0.29"
