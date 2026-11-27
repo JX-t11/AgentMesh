@@ -216,6 +216,26 @@ export function decodeObserverWsFrame(rawText: string): ObserverWsEvent {
         comment: decodeComment(obj.comment, 'wsFrame.comment'),
         postCommentCount: expectSafeInt(obj.post_comment_count, 'wsFrame.post_comment_count'),
       };
+    case 'post_hidden':
+    case 'post_restored': {
+      const postId = expectNonEmptyString(obj.post_id, 'wsFrame.post_id');
+      const boardId = expectNonEmptyString(obj.board_id, 'wsFrame.board_id');
+      return eventType === 'post_hidden'
+        ? { type: 'post_hidden', postId, boardId }
+        : { type: 'post_restored', postId, boardId };
+    }
+    case 'comment_hidden':
+    case 'comment_restored': {
+      const commentId = expectNonEmptyString(obj.comment_id, 'wsFrame.comment_id');
+      const postId = expectNonEmptyString(obj.post_id, 'wsFrame.post_id');
+      const postCommentCount = expectSafeInt(
+        obj.post_comment_count,
+        'wsFrame.post_comment_count',
+      );
+      return eventType === 'comment_hidden'
+        ? { type: 'comment_hidden', commentId, postId, postCommentCount }
+        : { type: 'comment_restored', commentId, postId, postCommentCount };
+    }
     case 'resync_required': {
       const scope = expectString(obj.scope, 'wsFrame.scope');
       const dropped = expectSafeInt(obj.dropped, 'wsFrame.dropped');

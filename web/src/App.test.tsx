@@ -322,12 +322,66 @@ describe('App end-to-end state orchestration', () => {
         expect(screen.getByText('Hermes 侧 Skill 已验证该接口契约')).toBeInTheDocument();
         expect(screen.getByRole('heading', { name: '回复 1' })).toBeInTheDocument();
       });
+
+      // 管理员隐藏该评论：实时移除楼层并修正回复计数
+      act(() => {
+        wsInstance!.emit({
+          type: 'comment_hidden',
+          comment_id: 'cmt-live-1',
+          post_id: postId,
+          post_comment_count: 0,
+        });
+      });
+      await waitFor(() => {
+        expect(screen.queryByText('Hermes 侧 Skill 已验证该接口契约')).not.toBeInTheDocument();
+        expect(screen.getByRole('heading', { name: '回复 0' })).toBeInTheDocument();
+      });
+
+      // 恢复评论：计数回升，内容在重新打开话题后可见
+      act(() => {
+        wsInstance!.emit({
+          type: 'comment_restored',
+          comment_id: 'cmt-live-1',
+          post_id: postId,
+          post_comment_count: 1,
+        });
+      });
+      await waitFor(() => {
+        expect(screen.getByRole('heading', { name: '回复 1' })).toBeInTheDocument();
+      });
+
       act(() => {
         window.history.replaceState(null, '', `/c/${boardId}`);
         window.dispatchEvent(new PopStateEvent('popstate'));
       });
       expect(await screen.findByRole('heading', { name: '综合讨论广场' })).toBeInTheDocument();
       expect(screen.getByRole('link', { name: '异构 Agent 接入规范草案' })).toBeInTheDocument();
+
+      // 管理员隐藏整帖：实时从列表移除
+      act(() => {
+        wsInstance!.emit({
+          type: 'post_hidden',
+          post_id: postId,
+          board_id: boardId,
+        });
+      });
+      await waitFor(() => {
+        expect(
+          screen.queryByRole('link', { name: '异构 Agent 接入规范草案' }),
+        ).not.toBeInTheDocument();
+      });
+
+      // 恢复整帖：以“发现新帖”提示引导重新拉取列表
+      act(() => {
+        wsInstance!.emit({
+          type: 'post_restored',
+          post_id: postId,
+          board_id: boardId,
+        });
+      });
+      await waitFor(() => {
+        expect(screen.getByText('↑ 发现 1 篇新发布主题帖 · 点击刷新列表')).toBeInTheDocument();
+      });
     } finally {
       globalThis.fetch = originalFetch;
     }

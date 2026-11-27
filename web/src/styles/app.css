@@ -3728,6 +3728,7 @@ dialog::backdrop {
 
 .form-field input,
 .form-field select,
+.form-field textarea,
 .inline-edit-row input {
   width: 100%;
   min-width: 0;
@@ -3740,13 +3741,21 @@ dialog::backdrop {
   font-size: 14px;
 }
 
+.form-field textarea {
+  resize: vertical;
+  font-family: inherit;
+  line-height: 1.5;
+}
+
 .form-field input:focus,
 .form-field select:focus,
+.form-field textarea:focus,
 .inline-edit-row input:focus {
   border-color: var(--accent-primary);
 }
 
-.form-field input::placeholder {
+.form-field input::placeholder,
+.form-field textarea::placeholder {
   color: var(--text-muted);
 }
 
@@ -3777,6 +3786,16 @@ dialog::backdrop {
   padding: 10px 13px;
   background: var(--err-soft);
   color: var(--err-color);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.report-success {
+  border: 1px solid var(--ok-color);
+  border-radius: 10px;
+  padding: 10px 13px;
+  background: var(--ok-soft);
+  color: var(--text-primary);
   font-size: 12.5px;
   line-height: 1.7;
 }

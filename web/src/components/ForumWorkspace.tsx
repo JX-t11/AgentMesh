@@ -4,6 +4,7 @@ import type {
   AgentView,
   BoardView,
   CommentView,
+  ContentReportTarget,
   PostSortOrder,
   UserView,
 } from '../types/domain';
@@ -57,6 +58,7 @@ interface ForumWorkspaceProps {
   onInspectAgent?: (agentId: string) => void;
   authorFilterAgentId?: string | null;
   onChangeAuthorFilter?: (agentId: string | null) => void;
+  onReportContent?: (target: ContentReportTarget) => void;
 }
 
 export function ForumWorkspace({
@@ -91,6 +93,7 @@ export function ForumWorkspace({
   onInspectAgent,
   authorFilterAgentId,
   onChangeAuthorFilter,
+  onReportContent,
 }: ForumWorkspaceProps) {
   const [searchText, setSearchText] = useState(postQuery);
   const [viewMode, setViewMode] = useState<TopicListViewMode>(readStoredTopicView);
@@ -306,6 +309,14 @@ export function ForumWorkspace({
                 </button>
               )}
             </div>
+          ) : detail.postHidden ? (
+            <div className="empty-state" role="status">
+              <Icon name="lock" />
+              <h1 ref={pageHeadingRef} tabIndex={-1}>
+                该话题已被管理员隐藏
+              </h1>
+              <span>内容正在等待复核；恢复后会重新出现在列表中。</span>
+            </div>
           ) : (
             <>
               <header className="topic-reading-heading">
@@ -371,6 +382,21 @@ export function ForumWorkspace({
                           <Icon name="reply" />
                           {detail.post.commentCount} 条回复
                         </a>
+                        {currentUser && onReportContent && (
+                          <button
+                            type="button"
+                            className="ghost-btn report-content-btn"
+                            onClick={() =>
+                              onReportContent({
+                                kind: 'post',
+                                postId: detail.post.id,
+                                title: detail.post.title,
+                              })
+                            }
+                          >
+                            举报
+                          </button>
+                        )}
                       </div>
                     </div>
                   </article>
@@ -475,6 +501,15 @@ export function ForumWorkspace({
                           onUnknownAgent={onUnknownAgent}
                           onInspectAgent={onInspectAgent}
                           onJumpToParent={jumpToParentComment}
+                          canReport={Boolean(currentUser && onReportContent)}
+                          onReport={(reported) =>
+                            onReportContent?.({
+                              kind: 'comment',
+                              postId: reported.postId,
+                              commentId: reported.id,
+                              excerpt: extractPlainExcerpt(reported.content, 60),
+                            })
+                          }
                         />
                       ))
                     )}
@@ -1053,6 +1088,8 @@ interface CommentCardProps {
   onUnknownAgent: (agentId: string) => void;
   onInspectAgent?: (agentId: string) => void;
   onJumpToParent: (parentCommentId: string) => void;
+  canReport: boolean;
+  onReport: (comment: CommentView) => void;
 }
 
 function CommentCard({
@@ -1065,6 +1102,8 @@ function CommentCard({
   onUnknownAgent,
   onInspectAgent,
   onJumpToParent,
+  canReport,
+  onReport,
 }: CommentCardProps) {
   const parent = comment.parentCommentId ? commentsById.get(comment.parentCommentId) : undefined;
   const parentAuthor = parent ? agentsById.get(parent.authorAgentId) : undefined;
@@ -1130,6 +1169,15 @@ function CommentCard({
             <Icon name="hash" />
             {floor}
           </a>
+          {canReport && (
+            <button
+              type="button"
+              className="ghost-btn report-content-btn"
+              onClick={() => onReport(comment)}
+            >
+              举报
+            </button>
+          )}
         </div>
       </div>
     </article>

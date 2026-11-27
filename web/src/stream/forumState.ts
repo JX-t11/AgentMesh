@@ -19,6 +19,7 @@ export interface BoardFeedState {
 
 export interface PostDetailState {
   post: PostView;
+  postHidden: boolean;
   comments: CommentView[];
   commentsById: Map<string, CommentView>;
   nextCursor: string | null;
@@ -117,6 +118,7 @@ export function createPostDetailState(
   }
   return {
     post,
+    postHidden: false,
     comments: firstCommentsPage.comments,
     commentsById,
     nextCursor: firstCommentsPage.nextCursor,
@@ -204,5 +206,108 @@ export function applyRealtimeCommentCreated(
       ...detail,
       post: updatedPost,
     },
+  };
+}
+
+// 板块话题数口径与列表一致：隐藏即从计数剔除，恢复则加回。
+export function adjustBoardPostCount(
+  boards: BoardView[],
+  boardId: string,
+  delta: 1 | -1,
+): BoardView[] {
+  return boards.map((b) =>
+    b.id === boardId ? { ...b, postCount: Math.max(0, b.postCount + delta) } : b,
+  );
+}
+
+export function removeHiddenPost(
+  feed: BoardFeedState | null,
+  postId: string,
+): BoardFeedState | null {
+  if (!feed || !feed.posts.some((p) => p.id === postId)) {
+    return feed;
+  }
+  return { ...feed, posts: feed.posts.filter((p) => p.id !== postId) };
+}
+
+export function setPostHiddenInDetail(
+  detail: PostDetailState | null,
+  postId: string,
+  hidden: boolean,
+): PostDetailState | null {
+  if (!detail || detail.post.id !== postId || detail.postHidden === hidden) {
+    return detail;
+  }
+  return { ...detail, postHidden: hidden };
+}
+
+// 恢复的帖子此前从任何列表拉取时都被排除，本地必然没有；用待刷新提示引导重新拉取。
+export function markRestoredPostPending(
+  feed: BoardFeedState | null,
+  boardId: string,
+): BoardFeedState | null {
+  if (!feed || (feed.boardId !== null && feed.boardId !== boardId)) {
+    return feed;
+  }
+  return { ...feed, pendingNewPosts: feed.pendingNewPosts + 1 };
+}
+
+export function applyRealtimeCommentHidden(
+  feed: BoardFeedState | null,
+  detail: PostDetailState | null,
+  commentId: string,
+  postId: string,
+  postCommentCount: number,
+): { feed: BoardFeedState | null; detail: PostDetailState | null } {
+  const nextFeed = feed
+    ? {
+        ...feed,
+        posts: feed.posts.map((p) =>
+          p.id === postId ? { ...p, commentCount: postCommentCount } : p,
+        ),
+      }
+    : null;
+
+  if (!detail || detail.post.id !== postId) {
+    return { feed: nextFeed, detail };
+  }
+  if (!detail.commentsById.has(commentId)) {
+    return { feed: nextFeed, detail: { ...detail, post: { ...detail.post, commentCount: postCommentCount } } };
+  }
+  const commentsById = new Map(detail.commentsById);
+  commentsById.delete(commentId);
+  return {
+    feed: nextFeed,
+    detail: {
+      ...detail,
+      post: { ...detail.post, commentCount: postCommentCount },
+      comments: detail.comments.filter((c) => c.id !== commentId),
+      commentsById,
+    },
+  };
+}
+
+// 恢复的评论内容不在本地状态（隐藏内容不出现在任何列表接口），只同步计数；重新打开详情即可看到内容。
+export function applyRealtimeCommentRestored(
+  feed: BoardFeedState | null,
+  detail: PostDetailState | null,
+  postId: string,
+  postCommentCount: number,
+): { feed: BoardFeedState | null; detail: PostDetailState | null } {
+  const nextFeed = feed
+    ? {
+        ...feed,
+        posts: feed.posts.map((p) =>
+          p.id === postId ? { ...p, commentCount: postCommentCount } : p,
+        ),
+      }
+    : null;
+
+  if (!detail || detail.post.id !== postId) {
+    return { feed: nextFeed, detail };
+  }
+  return {
+    feed: nextFeed,
+    detail: { ...detail, post: { ...detail.post, commentCount: postCommentCount } },
   };
 }

@@ -159,12 +159,12 @@ pub async fn hide_post(
             reason,
         )
         .await?;
-        publish_forum_change(
+        publish_post_change(
             &mut *tx,
             &state.events,
+            post_id,
             post.board_id,
             "post_hidden",
-            post_id,
         )
         .await?;
     }
@@ -202,12 +202,12 @@ pub async fn restore_post(
             "",
         )
         .await?;
-        publish_forum_change(
+        publish_post_change(
             &mut *tx,
             &state.events,
+            post_id,
             post.board_id,
             "post_restored",
-            post_id,
         )
         .await?;
     }
@@ -241,7 +241,8 @@ pub async fn hide_comment(
     let comment = fetch_comment(&mut *tx, comment_id)
         .await?
         .ok_or_else(|| AppError::NotFound("comment not found".into()))?;
-    if hidden.rows_affected() == 1 {
+    let changed = hidden.rows_affected() == 1;
+    if changed {
         sqlx::query(
             "UPDATE posts
              SET comment_count = GREATEST(comment_count - 1, 0)
@@ -250,7 +251,6 @@ pub async fn hide_comment(
         .bind(comment.post_id)
         .execute(&mut *tx)
         .await?;
-        let board_id = post_board_id(&mut *tx, comment.post_id).await?;
         insert_audit(
             &mut *tx,
             "admin",
@@ -261,20 +261,23 @@ pub async fn hide_comment(
             reason,
         )
         .await?;
-        publish_forum_change(
-            &mut *tx,
-            &state.events,
-            board_id,
-            "comment_hidden",
-            comment_id,
-        )
-        .await?;
     }
     let post_comment_count: i32 =
         sqlx::query_scalar("SELECT comment_count FROM posts WHERE id = $1")
             .bind(comment.post_id)
             .fetch_one(&mut *tx)
             .await?;
+    if changed {
+        publish_comment_change(
+            &mut *tx,
+            &state.events,
+            "comment_hidden",
+            comment_id,
+            comment.post_id,
+            post_comment_count,
+        )
+        .await?;
+    }
     tx.commit().await?;
 
     Ok(Json(crate::routes::forum::CommentEnvelope {
@@ -301,12 +304,12 @@ pub async fn restore_comment(
     let comment = fetch_comment(&mut *tx, comment_id)
         .await?
         .ok_or_else(|| AppError::NotFound("comment not found".into()))?;
-    if restored.rows_affected() == 1 {
+    let changed = restored.rows_affected() == 1;
+    if changed {
         sqlx::query("UPDATE posts SET comment_count = comment_count + 1 WHERE id = $1")
             .bind(comment.post_id)
             .execute(&mut *tx)
             .await?;
-        let board_id = post_board_id(&mut *tx, comment.post_id).await?;
         insert_audit(
             &mut *tx,
             "admin",
@@ -317,20 +320,23 @@ pub async fn restore_comment(
             "",
         )
         .await?;
-        publish_forum_change(
-            &mut *tx,
-            &state.events,
-            board_id,
-            "comment_restored",
-            comment_id,
-        )
-        .await?;
     }
     let post_comment_count: i32 =
         sqlx::query_scalar("SELECT comment_count FROM posts WHERE id = $1")
             .bind(comment.post_id)
             .fetch_one(&mut *tx)
             .await?;
+    if changed {
+        publish_comment_change(
+            &mut *tx,
+            &state.events,
+            "comment_restored",
+            comment_id,
+            comment.post_id,
+            post_comment_count,
+        )
+        .await?;
+    }
     tx.commit().await?;
 
     Ok(Json(crate::routes::forum::CommentEnvelope {
@@ -737,22 +743,12 @@ where
         .await
 }
 
-async fn post_board_id<'e, E>(executor: E, post_id: Uuid) -> Result<Uuid, sqlx::Error>
-where
-    E: sqlx::PgExecutor<'e>,
-{
-    sqlx::query_scalar("SELECT board_id FROM posts WHERE id = $1")
-        .bind(post_id)
-        .fetch_one(executor)
-        .await
-}
-
-async fn publish_forum_change<'e, E>(
+async fn publish_post_change<'e, E>(
     executor: E,
     events: &EventHub,
+    post_id: Uuid,
     board_id: Uuid,
     event_type: &str,
-    subject_id: Uuid,
 ) -> Result<(), sqlx::Error>
 where
     E: sqlx::PgExecutor<'e>,
@@ -763,7 +759,35 @@ where
         .await?;
     let frame = encode_event(&json!({
         "type": event_type,
-        "post_id": subject_id,
+        "post_id": post_id,
+        "board_id": board_id,
+    }));
+    events.publish_forum_scoped(frame, visibility == "public");
+    Ok(())
+}
+
+async fn publish_comment_change<'e, E>(
+    executor: E,
+    events: &EventHub,
+    event_type: &str,
+    comment_id: Uuid,
+    post_id: Uuid,
+    post_comment_count: i32,
+) -> Result<(), sqlx::Error>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    let visibility: String = sqlx::query_scalar(
+        "SELECT b.visibility FROM boards b JOIN posts p ON p.board_id = b.id WHERE p.id = $1",
+    )
+    .bind(post_id)
+    .fetch_one(executor)
+    .await?;
+    let frame = encode_event(&json!({
+        "type": event_type,
+        "comment_id": comment_id,
+        "post_id": post_id,
+        "post_comment_count": post_comment_count,
     }));
     events.publish_forum_scoped(frame, visibility == "public");
     Ok(())

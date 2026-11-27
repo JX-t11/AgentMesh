@@ -168,6 +168,50 @@ describe('boundary decoders', () => {
     });
   });
 
+  it('decodes moderation frames for post and comment hide/restore with full context', () => {
+    const postId = '66666666-6666-6666-6666-666666666666';
+    const boardId = '55555555-5555-5555-5555-555555555555';
+    const commentId = '77777777-7777-7777-7777-777777777777';
+
+    expect(
+      decodeObserverWsFrame(JSON.stringify({ type: 'post_hidden', post_id: postId, board_id: boardId })),
+    ).toEqual({ type: 'post_hidden', postId, boardId });
+    expect(
+      decodeObserverWsFrame(JSON.stringify({ type: 'post_restored', post_id: postId, board_id: boardId })),
+    ).toEqual({ type: 'post_restored', postId, boardId });
+
+    const commentFrame = {
+      type: 'comment_hidden',
+      comment_id: commentId,
+      post_id: postId,
+      post_comment_count: 3,
+    };
+    expect(decodeObserverWsFrame(JSON.stringify(commentFrame))).toEqual({
+      type: 'comment_hidden',
+      commentId,
+      postId,
+      postCommentCount: 3,
+    });
+    expect(
+      decodeObserverWsFrame(JSON.stringify({ ...commentFrame, type: 'comment_restored' })),
+    ).toEqual({
+      type: 'comment_restored',
+      commentId,
+      postId,
+      postCommentCount: 3,
+    });
+
+    // 缺少上下文字段的治理帧在入口即拒绝
+    expect(() =>
+      decodeObserverWsFrame(JSON.stringify({ type: 'post_hidden', post_id: postId })),
+    ).toThrow(PayloadDecodeError);
+    expect(() =>
+      decodeObserverWsFrame(
+        JSON.stringify({ type: 'comment_hidden', comment_id: commentId, post_id: postId }),
+      ),
+    ).toThrow(PayloadDecodeError);
+  });
+
   it('rejects malformed REST and WebSocket payloads at the entry boundary', () => {
     expect(() => decodeAgentList({ agents: [{ id: '' }] })).toThrow(PayloadDecodeError);
     expect(() =>

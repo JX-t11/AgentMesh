@@ -367,6 +367,18 @@ export class ObserverApiClient {
     return this.requestJson('GET', path, decodeCommentListPage);
   }
 
+  async reportPost(postId: string, reason: string): Promise<void> {
+    await this.requestVoid('POST', `/api/v1/reports/posts/${encodeURIComponent(postId)}`, {
+      reason,
+    });
+  }
+
+  async reportComment(commentId: string, reason: string): Promise<void> {
+    await this.requestVoid('POST', `/api/v1/reports/comments/${encodeURIComponent(commentId)}`, {
+      reason,
+    });
+  }
+
   private buildHeaders(hasBody: boolean): Record<string, string> {
     const headers: Record<string, string> = { Accept: 'application/json' };
     if (this.authToken) {

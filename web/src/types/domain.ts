@@ -170,6 +170,10 @@ export interface CommentListPage {
   hasMore: boolean;
 }
 
+export type ContentReportTarget =
+  | { kind: 'post'; postId: string; title: string }
+  | { kind: 'comment'; postId: string; commentId: string; excerpt: string };
+
 export type ObserverWsEvent =
   | { type: 'connected'; role: 'observer' }
   | { type: 'subscribed'; groups: string[]; forum: boolean }
@@ -177,6 +181,10 @@ export type ObserverWsEvent =
   | { type: 'group_message'; message: GroupMessageView }
   | { type: 'post_created'; post: PostView }
   | { type: 'comment_created'; comment: CommentView; postCommentCount: number }
+  | { type: 'post_hidden'; postId: string; boardId: string }
+  | { type: 'post_restored'; postId: string; boardId: string }
+  | { type: 'comment_hidden'; commentId: string; postId: string; postCommentCount: number }
+  | { type: 'comment_restored'; commentId: string; postId: string; postCommentCount: number }
   | { type: 'resync_required'; scope: 'group'; scopeId: string; dropped: number }
   | { type: 'resync_required'; scope: 'forum'; scopeId: null; dropped: number }
   | { type: 'error'; code: string; message: string };

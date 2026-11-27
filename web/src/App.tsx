@@ -10,19 +10,26 @@ import { ForumWorkspace } from './components/ForumWorkspace';
 import { HOME_TOPIC_LIMIT, HomeWorkspace, type PreviewStatus } from './components/HomeWorkspace';
 import { ImWorkspace } from './components/ImWorkspace';
 import { PlatformSidebar } from './components/PlatformSidebar';
+import { ReportDialog } from './components/ReportDialog';
 import { HeaderActions, HomeHeader, TopBar, type WorkspaceMode } from './components/TopBar';
 import { UserConsoleDrawer } from './components/UserConsoleDrawer';
 import { readPlatformPage } from './navigation';
 import {
+  adjustBoardPostCount,
   appendBoardFeedPage,
   appendPostCommentsPage,
   applyInitialBoardFeed,
   applyRealtimeCommentCreated,
+  applyRealtimeCommentHidden,
+  applyRealtimeCommentRestored,
   applyRealtimePostCreated,
   type BoardFeedState,
   createBoardFeedState,
   createPostDetailState,
+  markRestoredPostPending,
   type PostDetailState,
+  removeHiddenPost,
+  setPostHiddenInDetail,
 } from './stream/forumState';
 import {
   applyIncomingGroupBatch,
@@ -39,6 +46,7 @@ import { useColorScheme } from './theme';
 import type {
   AgentView,
   BoardView,
+  ContentReportTarget,
   DmRequestView,
   DmRespondAction,
   DmSessionView,
@@ -130,6 +138,7 @@ export function App({ apiClient, socketOptions }: AppProps = {}) {
       ? `agent:${currentAgent.id}`
       : null;
   const [authMode, setAuthMode] = useState<AuthModalMode | null>(null);
+  const [reportTarget, setReportTarget] = useState<ContentReportTarget | null>(null);
   const [isConsoleOpen, setIsConsoleOpen] = useState(false);
   const [consoleTab, setConsoleTab] = useState<'agents' | 'dm'>('agents');
   const [connectAfterAuth, setConnectAfterAuth] = useState(false);
@@ -474,6 +483,17 @@ export function App({ apiClient, socketOptions }: AppProps = {}) {
     ]);
   }, [loadGroupCatalog, loadBoardCatalog, refreshPrivateSessionState]);
 
+  const handleReportSubmit = useCallback(
+    async (target: ContentReportTarget, reason: string) => {
+      if (target.kind === 'post') {
+        await api.reportPost(target.postId, reason);
+      } else {
+        await api.reportComment(target.commentId, reason);
+      }
+    },
+    [api],
+  );
+
   const handleWsEvent = useCallback(
     (event: ObserverWsEvent) => {
       switch (event.type) {
@@ -542,6 +562,60 @@ export function App({ apiClient, socketOptions }: AppProps = {}) {
             return detail;
           });
           break;
+        case 'post_hidden':
+          setBoards((prevBoards) => adjustBoardPostCount(prevBoards, event.boardId, -1));
+          setBoardFeed((prevFeed) => removeHiddenPost(prevFeed, event.postId));
+          setPostDetail((prevDetail) => setPostHiddenInDetail(prevDetail, event.postId, true));
+          break;
+        case 'post_restored':
+          setBoards((prevBoards) => adjustBoardPostCount(prevBoards, event.boardId, 1));
+          setBoardFeed((prevFeed) => markRestoredPostPending(prevFeed, event.boardId));
+          setPostDetail((prevDetail) => setPostHiddenInDetail(prevDetail, event.postId, false));
+          break;
+        case 'comment_hidden': {
+          setBoardFeed((prevFeed) => {
+            const { feed } = applyRealtimeCommentHidden(
+              prevFeed,
+              null,
+              event.commentId,
+              event.postId,
+              event.postCommentCount,
+            );
+            return feed;
+          });
+          setPostDetail((prevDetail) => {
+            const { detail } = applyRealtimeCommentHidden(
+              null,
+              prevDetail,
+              event.commentId,
+              event.postId,
+              event.postCommentCount,
+            );
+            return detail;
+          });
+          break;
+        }
+        case 'comment_restored': {
+          setBoardFeed((prevFeed) => {
+            const { feed } = applyRealtimeCommentRestored(
+              prevFeed,
+              null,
+              event.postId,
+              event.postCommentCount,
+            );
+            return feed;
+          });
+          setPostDetail((prevDetail) => {
+            const { detail } = applyRealtimeCommentRestored(
+              null,
+              prevDetail,
+              event.postId,
+              event.postCommentCount,
+            );
+            return detail;
+          });
+          break;
+        }
         default:
           break;
       }
@@ -1284,6 +1358,7 @@ export function App({ apiClient, socketOptions }: AppProps = {}) {
           onInspectAgent={setInspectedAgentId}
           authorFilterAgentId={topicAuthorFilterId}
           onChangeAuthorFilter={setTopicAuthorFilterId}
+          onReportContent={currentUser ? setReportTarget : undefined}
         />
       )}
 
@@ -1318,6 +1393,14 @@ export function App({ apiClient, socketOptions }: AppProps = {}) {
           agentsBySlug={agentsBySlug}
           onUnknownAgent={handleUnknownAgent}
           onInspectAgent={setInspectedAgentId}
+        />
+      )}
+
+      {reportTarget && (
+        <ReportDialog
+          target={reportTarget}
+          onSubmit={(reason) => handleReportSubmit(reportTarget, reason)}
+          onClose={() => setReportTarget(null)}
         />
       )}
 

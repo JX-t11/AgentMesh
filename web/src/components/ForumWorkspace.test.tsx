@@ -1,12 +1,19 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  adjustBoardPostCount,
   applyInitialBoardFeed,
   applyRealtimeCommentCreated,
+  applyRealtimeCommentHidden,
+  applyRealtimeCommentRestored,
   applyRealtimePostCreated,
   createPostDetailState,
+  markRestoredPostPending,
+  removeHiddenPost,
+  setPostHiddenInDetail,
 } from '../stream/forumState';
-import type { AgentView, BoardView, CommentView, PostView } from '../types/domain';
+import type { AgentView, BoardView, CommentView, PostView, UserView } from '../types/domain';
+import { extractPlainExcerpt } from './MarkdownContent';
 import { ForumWorkspace } from './ForumWorkspace';
 
 const agents: AgentView[] = [
@@ -282,5 +289,157 @@ describe('ForumWorkspace and forumState real-time transitions', () => {
     expect(screen.getByText('已采纳，使用 FOR NO KEY UPDATE 按主键升序锁定')).toBeInTheDocument();
     expect(screen.getByText('回复 @hermes-reviewer')).toBeInTheDocument();
     expect(container.querySelector('textarea, form, [contenteditable="true"]')).toBeNull();
+  });
+
+  it('applies governance realtime transitions and exposes report entries only for human users', () => {
+    const humanUser: UserView = {
+      id: 'u-1',
+      username: 'alice',
+      displayName: 'Alice',
+      createdAt: '2026-11-16T02:00:00Z',
+    };
+    let feed = applyInitialBoardFeed('b-1', 'active', {
+      boardId: 'b-1',
+      posts: [post1],
+      nextCursor: null,
+      hasMore: false,
+    });
+    let detail = createPostDetailState(post1, {
+      postId: 'p-1',
+      comments: [comment1, comment2],
+      nextCursor: null,
+      hasMore: false,
+    });
+
+    // 隐藏 c-2：楼层移除，帖内计数同步为服务端口径
+    const hiddenComment = applyRealtimeCommentHidden(feed, detail, 'c-2', 'p-1', 1);
+    expect(hiddenComment.feed?.posts[0]?.commentCount).toBe(1);
+    expect(hiddenComment.detail?.comments.map((c) => c.id)).toEqual(['c-1']);
+    expect(hiddenComment.detail?.post.commentCount).toBe(1);
+    feed = hiddenComment.feed!;
+    detail = hiddenComment.detail!;
+
+    // 恢复评论：内容不在本地（隐藏内容不出现在列表接口），仅修正计数
+    const restoredComment = applyRealtimeCommentRestored(feed, detail, 'p-1', 2);
+    expect(restoredComment.feed?.posts[0]?.commentCount).toBe(2);
+    expect(restoredComment.detail?.post.commentCount).toBe(2);
+    expect(restoredComment.detail?.comments.map((c) => c.id)).toEqual(['c-1']);
+    feed = restoredComment.feed!;
+    detail = restoredComment.detail!;
+
+    // 隐藏整帖：列表移除、板块计数减一、详情进入隐藏提示态
+    const boardsAfterHide = adjustBoardPostCount(boards, 'b-1', -1);
+    expect(boardsAfterHide[0]?.postCount).toBe(1);
+    const feedAfterHide = removeHiddenPost(feed, 'p-1');
+    expect(feedAfterHide?.posts).toEqual([]);
+    const detailAfterHide = setPostHiddenInDetail(detail, 'p-1', true);
+    expect(detailAfterHide?.postHidden).toBe(true);
+
+    // 恢复整帖：板块计数加回，列表以待刷新提示引导重新拉取
+    expect(adjustBoardPostCount(boardsAfterHide, 'b-1', 1)[0]?.postCount).toBe(2);
+    expect(markRestoredPostPending(feedAfterHide, 'b-1')?.pendingNewPosts).toBe(1);
+    expect(markRestoredPostPending(feedAfterHide, 'other-board')).toBe(feedAfterHide);
+
+    const { rerender } = render(
+      <ForumWorkspace
+        boards={boardsAfterHide}
+        activeBoardId="b-1"
+        onSelectBoard={vi.fn()}
+        onShowCategories={vi.fn()}
+        onSearchPosts={vi.fn()}
+        feed={feedAfterHide}
+        isLoadingFeed={false}
+        isLoadingMorePosts={false}
+        onChangeSort={vi.fn()}
+        onRefreshBoard={vi.fn()}
+        onLoadMorePosts={vi.fn()}
+        activePostId="p-1"
+        onSelectPost={vi.fn()}
+        onReturnToList={vi.fn()}
+        detail={detailAfterHide}
+        isLoadingDetail={false}
+        isLoadingMoreComments={false}
+        onLoadMoreComments={vi.fn()}
+        agentsById={agentsById}
+        onUnknownAgent={vi.fn()}
+        currentUser={humanUser}
+      />,
+    );
+    expect(screen.getByRole('heading', { name: '该话题已被管理员隐藏' })).toBeInTheDocument();
+
+    const onReportContent = vi.fn();
+    rerender(
+      <ForumWorkspace
+        boards={boards}
+        activeBoardId="b-1"
+        onSelectBoard={vi.fn()}
+        onShowCategories={vi.fn()}
+        onSearchPosts={vi.fn()}
+        feed={feed}
+        isLoadingFeed={false}
+        isLoadingMorePosts={false}
+        onChangeSort={vi.fn()}
+        onRefreshBoard={vi.fn()}
+        onLoadMorePosts={vi.fn()}
+        activePostId="p-1"
+        onSelectPost={vi.fn()}
+        onReturnToList={vi.fn()}
+        detail={detail}
+        isLoadingDetail={false}
+        isLoadingMoreComments={false}
+        onLoadMoreComments={vi.fn()}
+        agentsById={agentsById}
+        onUnknownAgent={vi.fn()}
+        currentUser={humanUser}
+        onReportContent={onReportContent}
+      />,
+    );
+    // 楼主 + 存留评论（c-2 已被隐藏且恢复不回流内容）各有一个举报入口
+    const reportButtons = screen.getAllByRole('button', { name: '举报' });
+    expect(reportButtons).toHaveLength(2);
+
+    fireEvent.click(screen.getByText('楼主 · 由 Agent 发表').parentElement!.querySelector('button')!);
+    expect(onReportContent).toHaveBeenCalledWith({
+      kind: 'post',
+      postId: 'p-1',
+      title: post1.title,
+    });
+
+    fireEvent.click(reportButtons[1]);
+    expect(onReportContent).toHaveBeenCalledWith({
+      kind: 'comment',
+      postId: 'p-1',
+      commentId: 'c-1',
+      excerpt: extractPlainExcerpt(comment1.content, 60),
+    });
+
+    // 无人类登录（纯 Agent 会话）不展示举报入口
+    rerender(
+      <ForumWorkspace
+        boards={boards}
+        activeBoardId="b-1"
+        onSelectBoard={vi.fn()}
+        onShowCategories={vi.fn()}
+        onSearchPosts={vi.fn()}
+        feed={feed}
+        isLoadingFeed={false}
+        isLoadingMorePosts={false}
+        onChangeSort={vi.fn()}
+        onRefreshBoard={vi.fn()}
+        onLoadMorePosts={vi.fn()}
+        activePostId="p-1"
+        onSelectPost={vi.fn()}
+        onReturnToList={vi.fn()}
+        detail={detail}
+        isLoadingDetail={false}
+        isLoadingMoreComments={false}
+        onLoadMoreComments={vi.fn()}
+        agentsById={agentsById}
+        onUnknownAgent={vi.fn()}
+        currentUser={null}
+        onReportContent={onReportContent}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: '举报' })).not.toBeInTheDocument();
   });
 });
