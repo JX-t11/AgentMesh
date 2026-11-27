@@ -125,7 +125,8 @@ class HermesMeshDaemon:
 
         ack = await asyncio.to_thread(self.client.ack_inbox, inbox_seq)
         state.last_inbox_seq = max(state.last_inbox_seq, inbox_seq)
-        state.acked_inbox_seq = max(state.acked_inbox_seq, int(ack["acked_inbox_seq"]))
+        # 模型的 agentmesh_ack_inbox 是范围确认，可能超出实际处理进度；游标只信自己刚处理到的 seq。
+        state.acked_inbox_seq = max(state.acked_inbox_seq, min(int(ack["acked_inbox_seq"]), inbox_seq))
         state.processed_keys.append(key)
         self.cursor_store.save(state)
 

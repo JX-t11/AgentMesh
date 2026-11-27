@@ -122,13 +122,21 @@ export class AgentMeshBridgeDaemon {
 
     if (item.actor_agent_id !== selfId) {
       const prompt = await this.buildWakePrompt(item);
-      await this.runTurn({ kind: 'inbox', key, prompt });
+      try {
+        await this.runTurn({ kind: 'inbox', key, prompt });
+      } catch (err) {
+        // 唤醒轮失败（模型服务限流、CLI 退出等）：不 ack、不记 processedKeys，留给下次回放重试；
+        // 错误就地消化，任何调用路径（WS 链、catch_up、重复投递）都不让 rejection 逃逸。
+        this.log({ event: 'turn_error', message: String(err) });
+        return;
+      }
       this.log({ event: 'turn', status: 'completed', key, kind: item.kind, inbox_seq: item.inbox_seq });
     }
 
     const ackRes = await this.client.ackInbox(item.inbox_seq);
     state.lastInboxSeq = Math.max(state.lastInboxSeq, item.inbox_seq);
-    state.ackedInboxSeq = Math.max(state.ackedInboxSeq, ackRes.acked_inbox_seq);
+    // 模型的 agentmesh_ack_inbox 是范围确认，可能超出实际处理进度；游标只信自己刚处理到的 seq。
+    state.ackedInboxSeq = Math.max(state.ackedInboxSeq, Math.min(ackRes.acked_inbox_seq, item.inbox_seq));
     state.processedKeys.push(key);
     this.cursorStore.save(state);
   }
@@ -203,7 +211,14 @@ export class AgentMeshBridgeDaemon {
       if (this.stopped) break;
       await delay(backoffMs);
       backoffMs = Math.min(backoffMs * 2, 10_000);
-      await this.catchUpInbox(selfId);
+      // 重连后的积压回放若有一轮唤醒失败（如模型服务限流），事件保持未确认、下次回放重试；
+      // 守护进程必须存活，与 WS 帧路径的 turn_error 语义一致。
+      try {
+        await this.catchUpInbox(selfId);
+      } catch (err) {
+        if (this.stopped) break;
+        this.log({ event: 'catchup_error', message: err instanceof Error ? err.message : String(err) });
+      }
     }
   }
 
@@ -355,6 +370,27 @@ export function createOpenClawTurnRunner(opts: {
 }
 
 async function runCliDaemon(): Promise<void> {
+  // 顶层兜底：把逃逸的异步失败打到 stdout 供 E2E 取证。unhandledRejection 意味着等待方缺失，
+  // 守护进程的状态全部走事件驱动的重试路径，记录后保持存活；uncaughtException 是同步异常，
+  // 状态可能已不一致，记录后退出。
+  process.on('unhandledRejection', (reason) => {
+    console.log(
+      JSON.stringify({
+        event: 'unhandled_rejection',
+        message: reason instanceof Error ? (reason.stack ?? reason.message) : String(reason),
+      }),
+    );
+  });
+  process.on('uncaughtException', (err) => {
+    console.log(
+      JSON.stringify({
+        event: 'uncaught_exception',
+        message: err instanceof Error ? (err.stack ?? err.message) : String(err),
+      }),
+    );
+    process.exit(1);
+  });
+
   const client = new AgentMeshClient(resolveAgentMeshConfig());
   const stateDir = process.env.AGENTMESH_STATE_DIR ?? '/runtime-state';
   const slug = process.env.AGENTMESH_AGENT_SLUG ?? 'openclaw-agent';
