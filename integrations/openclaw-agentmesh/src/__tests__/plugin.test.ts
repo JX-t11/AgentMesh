@@ -2,8 +2,8 @@ import { createServer } from 'node:http';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
-import plugin from '../index.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import plugin, { createAgentMeshTools } from '../index.js';
 import { AgentMeshApiError, AgentMeshClient, InboxEventView } from '../client.js';
 import { AgentMeshBridgeDaemon, createOpenClawTurnRunner, FileCursorStore } from '../daemon.js';
 
@@ -662,6 +662,110 @@ describe('openclaw-agentmesh plugin & client', () => {
     } finally {
       server.close();
     }
+  });
+
+  it('emits a single-line tool receipt to stderr for each tool call', async () => {
+    const tools = createAgentMeshTools(
+      () =>
+        new AgentMeshClient({
+          baseUrl: 'http://127.0.0.1:1',
+          token: 'amesh_tok',
+          fetchImpl: async () =>
+            new Response(JSON.stringify({ following: true }), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            }),
+        }),
+    );
+    const follow = tools.find((tool) => tool.name === 'agentmesh_search_posts')!;
+    const chunks: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      chunks.push(String(chunk));
+      return true;
+    });
+    try {
+      await follow.execute('call-1', { q: 'mesh' });
+      const okLine = chunks.join('').split('\n').find((l) => l.startsWith('AGENTMESH_TOOL_RECEIPT '));
+      expect(okLine).toBeDefined();
+      const okReceipt = JSON.parse(okLine!.slice('AGENTMESH_TOOL_RECEIPT '.length));
+      expect(okReceipt.tool).toBe('agentmesh_search_posts');
+      expect(okReceipt.ok).toBe(true);
+      expect(typeof okReceipt.duration_ms).toBe('number');
+      expect(okReceipt.args).toEqual({ q: 'mesh' });
+      expect(okLine!.endsWith('\n')).toBe(false); // single line, caller adds newline
+
+      chunks.length = 0;
+      const failing = createAgentMeshTools(
+        () =>
+          new AgentMeshClient({
+            baseUrl: 'http://127.0.0.1:1',
+            token: 'amesh_tok',
+            fetchImpl: async () =>
+              new Response(JSON.stringify({ error: { code: 'boom', message: 'failed' } }), {
+                status: 500,
+                headers: { 'Content-Type': 'application/json' },
+              }),
+          }),
+      );
+      const search = failing.find((tool) => tool.name === 'agentmesh_search_posts')!;
+      await expect(search.execute('call-2', { q: 'mesh' })).rejects.toThrow();
+      const failLine = chunks.join('').split('\n').find((l) => l.startsWith('AGENTMESH_TOOL_RECEIPT '));
+      expect(failLine).toBeDefined();
+      const failReceipt = JSON.parse(failLine!.slice('AGENTMESH_TOOL_RECEIPT '.length));
+      expect(failReceipt).toMatchObject({ tool: 'agentmesh_search_posts', ok: false, args: { q: 'mesh' } });
+      expect(failLine).not.toContain('failed');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('converts tool receipt lines from child output into structured log events', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'openclaw-receipts-'));
+    tempDirs.push(dir);
+    const bin = join(dir, 'openclaw-receipts');
+    writeFileSync(
+      bin,
+      [
+        '#!/bin/sh',
+        'echo "noise line"',
+        `echo 'AGENTMESH_TOOL_RECEIPT {"tool":"agentmesh_search_posts","ok":true,"duration_ms":12,"args":{"q":"mesh"}}' >&2`,
+        `echo 'AGENTMESH_TOOL_RECEIPT not-json' >&2`,
+        'exit 0',
+        '',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      logs.push(args.map(String).join(' '));
+    });
+    try {
+      const runner = createOpenClawTurnRunner({ binaryPath: bin, sessionId: 'session-1' });
+      await runner({ kind: 'inbox', key: 'inbox:7', prompt: 'Do the work' });
+    } finally {
+      spy.mockRestore();
+    }
+
+    const events = logs
+      .map((line) => {
+        try {
+          return JSON.parse(line) as Record<string, unknown>;
+        } catch {
+          return null;
+        }
+      })
+      .filter((e): e is Record<string, unknown> => e !== null);
+    expect(events).toEqual([
+      {
+        event: 'tool_receipt',
+        turn: 'inbox:7',
+        tool: 'agentmesh_search_posts',
+        ok: true,
+        duration_ms: 12,
+        args: { q: 'mesh' },
+      },
+    ]);
   });
 
   it('runs turn commands and closes a websocket cleanly on daemon stop', async () => {

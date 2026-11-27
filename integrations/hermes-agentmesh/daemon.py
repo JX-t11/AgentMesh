@@ -217,6 +217,30 @@ class HermesMeshDaemon:
         self._stopped = True
 
 
+def _print_tool_receipts(text: str, turn_key: str) -> None:
+    prefix = "AGENTMESH_TOOL_RECEIPT "
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith(prefix):
+            continue
+        try:
+            receipt = json.loads(stripped[len(prefix):])
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(receipt, dict):
+            continue
+        event: Dict[str, Any] = {
+            "event": "tool_receipt",
+            "turn": turn_key,
+            "tool": receipt.get("tool"),
+            "ok": receipt.get("ok"),
+            "duration_ms": receipt.get("duration_ms"),
+        }
+        if receipt.get("args") is not None:
+            event["args"] = receipt["args"]
+        print(json.dumps(event, ensure_ascii=False), flush=True)
+
+
 def create_hermes_turn_runner(role_prompt: Optional[str] = None) -> TurnRunner:
     hermes_bin = os.getenv("HERMES_BIN", "/opt/hermes/bin/hermes")
     max_turns = os.getenv("HERMES_MAX_TURNS", "8")
@@ -237,6 +261,7 @@ def create_hermes_turn_runner(role_prompt: Optional[str] = None) -> TurnRunner:
             return f"{proc.stdout}\n{proc.stderr}"
 
         out = await asyncio.to_thread(_exec)
+        _print_tool_receipts(out, _key)
         for line in reversed(out.splitlines()):
             if line.strip().startswith("session_id:"):
                 sid = line.split("session_id:", 1)[1].strip()

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import sys
+import time
 from typing import Any, Callable, Dict, Tuple
 
 from .client import AgentMeshApiError, AgentMeshClient, resolve_config
@@ -30,11 +32,59 @@ def _json_err(exc: Exception) -> str:
     return json.dumps({"error": {"code": "invalid_input", "message": str(exc)}}, ensure_ascii=False)
 
 
+RECEIPT_ARG_KEYS = ("target_agent", "board", "group", "post_id", "slug", "q", "mentions")
+RECEIPT_PREFIX = "AGENTMESH_TOOL_RECEIPT "
+
+# Set by _with_receipt around each handler invocation from TOOL_SPECS.
+_RECEIPT_CONTEXT: Dict[str, Any] = {}
+
+
+def _emit_tool_receipt(tool: str, ok: bool, started: float) -> None:
+    receipt: Dict[str, Any] = {
+        "tool": tool,
+        "ok": ok,
+        "duration_ms": int((time.monotonic() - started) * 1000),
+    }
+    args = _RECEIPT_CONTEXT.get("args")
+    if isinstance(args, dict):
+        picked: Dict[str, Any] = {}
+        for key in RECEIPT_ARG_KEYS:
+            value = args.get(key)
+            if isinstance(value, str) and value:
+                picked[key] = value
+            elif isinstance(value, list) and value and all(isinstance(v, str) for v in value):
+                picked[key] = value
+        if picked:
+            receipt["args"] = picked
+    # stderr only: stdout becomes model-visible context
+    sys.stderr.write(RECEIPT_PREFIX + json.dumps(receipt, ensure_ascii=False) + "\n")
+    sys.stderr.flush()
+
+
 def _run_tool(fn: Callable[[AgentMeshClient], Any]) -> str:
+    tool = _RECEIPT_CONTEXT.get("tool")
+    started = time.monotonic()
     try:
-        return _json_ok(fn(_get_client()))
+        result = _json_ok(fn(_get_client()))
     except Exception as exc:
+        if tool:
+            _emit_tool_receipt(tool, False, started)
         return _json_err(exc)
+    if tool:
+        _emit_tool_receipt(tool, True, started)
+    return result
+
+
+def _with_receipt(tool: str, handler: Callable[..., str]) -> Callable[..., str]:
+    def wrapped(args: Dict[str, Any], **kw: Any) -> str:
+        _RECEIPT_CONTEXT["tool"] = tool
+        _RECEIPT_CONTEXT["args"] = args
+        try:
+            return handler(args, **kw)
+        finally:
+            _RECEIPT_CONTEXT.clear()
+
+    return wrapped
 
 
 def handle_whoami(args: Dict[str, Any], **kw: Any) -> str:
@@ -617,4 +667,10 @@ TOOL_SPECS: Tuple[Tuple[str, Dict[str, Any], Callable[..., str], str], ...] = (
         handle_list_dm_sessions,
         "🔒",
     ),
+)
+
+# Handlers emit tool-call receipts only when wrapped with their tool name.
+TOOL_SPECS = tuple(
+    (name, schema, _with_receipt(name, handler), emoji)
+    for name, schema, handler, emoji in TOOL_SPECS
 )

@@ -41,8 +41,50 @@ const pageParameters = {
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
 };
 
+const RECEIPT_ARG_KEYS = ['target_agent', 'board', 'group', 'post_id', 'slug', 'q', 'mentions'];
+
+function receiptArgs(params: Record<string, unknown>): Record<string, string | string[]> | undefined {
+  const args: Record<string, string | string[]> = {};
+  for (const key of RECEIPT_ARG_KEYS) {
+    const value = params[key];
+    if (typeof value === 'string' && value !== '') {
+      args[key] = value;
+    } else if (Array.isArray(value) && value.length > 0 && value.every((v) => typeof v === 'string')) {
+      args[key] = value as string[];
+    }
+  }
+  return Object.keys(args).length > 0 ? args : undefined;
+}
+
+function emitToolReceipt(tool: string, ok: boolean, startedMs: number, params: Record<string, unknown>): void {
+  const receipt: Record<string, unknown> = { tool, ok, duration_ms: Date.now() - startedMs };
+  const args = receiptArgs(params);
+  if (args) {
+    receipt.args = args;
+  }
+  // stderr only: stdout becomes model-visible context
+  process.stderr.write(`AGENTMESH_TOOL_RECEIPT ${JSON.stringify(receipt)}\n`);
+}
+
+function withToolReceipt(tool: OpenClawToolDefinition<any>): OpenClawToolDefinition<any> {
+  return {
+    ...tool,
+    execute: async (id, params) => {
+      const startedMs = Date.now();
+      try {
+        const result = await tool.execute(id, params);
+        emitToolReceipt(tool.name, true, startedMs, (params ?? {}) as Record<string, unknown>);
+        return result;
+      } catch (err) {
+        emitToolReceipt(tool.name, false, startedMs, (params ?? {}) as Record<string, unknown>);
+        throw err;
+      }
+    },
+  };
+}
+
 export function createAgentMeshTools(getClient: () => AgentMeshClient): OpenClawToolDefinition<any>[] {
-  return [
+  const tools: OpenClawToolDefinition<any>[] = [
     {
       name: 'agentmesh_whoami',
       description: 'Inspect current authenticated Agent identity and list all registered AgentMesh peer agents (slugs and UUIDs).',
@@ -472,6 +514,7 @@ export function createAgentMeshTools(getClient: () => AgentMeshClient): OpenClaw
       execute: async () => okResult({ sessions: await getClient().listDmSessions() }),
     },
   ];
+  return tools.map(withToolReceipt);
 }
 
 const plugin: OpenClawPluginEntry = {

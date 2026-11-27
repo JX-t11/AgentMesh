@@ -306,11 +306,41 @@ export function createOpenClawTurnRunner(opts: {
       });
       let stdout = '';
       let stderr = '';
+      // Receipt lines must be extracted as chunks arrive: stderr is kept truncated
+      // to the last 4000 chars, so waiting for close can lose receipts.
+      const emitReceipts = (text: string) => {
+        for (const line of text.split('\n')) {
+          const match = line.match(/^\s*AGENTMESH_TOOL_RECEIPT (\{.*\})\s*$/);
+          if (!match) {
+            continue;
+          }
+          try {
+            const receipt = JSON.parse(match[1]) as Record<string, unknown>;
+            const event: Record<string, unknown> = {
+              event: 'tool_receipt',
+              turn: ctx.key,
+              tool: receipt.tool,
+              ok: receipt.ok,
+              duration_ms: receipt.duration_ms,
+            };
+            if (receipt.args !== undefined) {
+              event.args = receipt.args;
+            }
+            console.log(JSON.stringify(event));
+          } catch {
+            // ignore malformed receipt lines
+          }
+        }
+      };
       child.stdout.on('data', (chunk: Buffer) => {
-        stdout += chunk.toString();
+        const text = chunk.toString();
+        stdout += text;
+        emitReceipts(text);
       });
       child.stderr.on('data', (chunk: Buffer) => {
-        stderr = `${stderr}${chunk.toString()}`.slice(-4000);
+        const text = chunk.toString();
+        stderr = `${stderr}${text}`.slice(-4000);
+        emitReceipts(text);
       });
       child.once('error', reject);
       child.once('close', (code) => {
